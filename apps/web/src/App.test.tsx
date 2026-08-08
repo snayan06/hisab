@@ -23,7 +23,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock('./lib/api', () => api)
 
-import App, { applyConfirmedTransaction, LedgerLoadError, ledgerLoadIssue } from './App'
+import App, { applyConfirmedTransaction, isDemoExperience, LedgerLoadError, ledgerLoadIssue } from './App'
 import type { Dashboard, Transaction } from './types'
 
 describe('first-run gate', () => {
@@ -39,16 +39,24 @@ describe('first-run gate', () => {
     vi.clearAllMocks()
   })
 
-  it('does not bootstrap until the user explicitly chooses the fictional demo', async () => {
+  it('does not bootstrap until the user explicitly chooses the sample demo', async () => {
     const user = userEvent.setup()
     render(<RouterProvider><App /></RouterProvider>)
     expect(screen.getByRole('heading', { name: 'Where does your money live?' })).toBeInTheDocument()
     expect(api.bootstrapDemo).not.toHaveBeenCalled()
 
-    await user.click(screen.getByRole('button', { name: 'Explore fictional demo' }))
+    await user.click(screen.getByRole('button', { name: 'Explore sample demo' }))
     await waitFor(() => expect(api.bootstrapDemo).toHaveBeenCalledTimes(1))
     expect(localStorage.getItem('artha.setup.complete')).toBe('true')
     expect(await screen.findByRole('heading', { name: 'Your money, made clear.' })).toBeInTheDocument()
+  })
+})
+
+describe('authenticated demo presentation', () => {
+  it('uses the server-owned profile flag without turning personal profiles into demos', () => {
+    expect(isDemoExperience(false, { displayName: 'Demo', householdName: 'Artha demo', members: [], isDemo: true })).toBe(true)
+    expect(isDemoExperience(false, { displayName: 'Nayan', householdName: 'My household', members: [], isDemo: false })).toBe(false)
+    expect(isDemoExperience(true, { displayName: 'Local', householdName: 'Local demo', members: [], isDemo: false })).toBe(true)
   })
 })
 

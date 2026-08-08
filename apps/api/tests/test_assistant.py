@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from google.genai._gaos.lib import compat_errors as interaction_errors
 from pydantic import ValidationError
 
 from artha_api.assistant import (
@@ -56,6 +57,45 @@ class FakeGeminiClient:
     def __init__(self, output_text: str) -> None:
         self.aio = SimpleNamespace(
             interactions=FakeGeminiInteractions(output_text),
+            models=FakeGeminiModels(),
+        )
+
+
+class RateLimitedGeminiInteractions:
+    async def create(self, **_body: object) -> SimpleNamespace:
+        request = httpx.Request("POST", "https://gemini.invalid/interactions")
+        response = httpx.Response(
+            429,
+            request=request,
+            headers={"Retry-After": "23"},
+        )
+        raise interaction_errors.RateLimitError(
+            "sensitive provider quota response",
+            response=response,
+            body={"error": "must not escape"},
+        )
+
+
+class RateLimitedGeminiClient:
+    def __init__(self) -> None:
+        self.aio = SimpleNamespace(
+            interactions=RateLimitedGeminiInteractions(),
+            models=FakeGeminiModels(),
+        )
+
+
+class FailingGeminiInteractions:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def create(self, **_body: object) -> SimpleNamespace:
+        raise self.error
+
+
+class FailingGeminiClient:
+    def __init__(self, error: Exception) -> None:
+        self.aio = SimpleNamespace(
+            interactions=FailingGeminiInteractions(error),
             models=FakeGeminiModels(),
         )
 
@@ -448,6 +488,9 @@ async def test_disabled_assistant_is_unavailable(
         "active_provider": None,
         "ollama_fallback_enabled": False,
         "detail": "disabled",
+        "data_policy": "sample_only",
+        "personal_data_enabled": False,
+        "is_demo": False,
     }
     with pytest.raises(
         AssistantUnavailableError, match="AI assistant is unavailable"
@@ -989,6 +1032,76 @@ async def test_capture_diagnostics_classify_rate_limit_without_provider_text() -
 
 
 @pytest.mark.asyncio
+async def test_interactions_rate_limit_is_sanitized_for_capture() -> None:
+    assistant = LocalFinancialAssistant(
+        AssistantSettings(
+            provider=LlmProvider.GEMINI,
+            gemini_api_key="gemini-test-key",
+        ),
+        gemini_client=RateLimitedGeminiClient(),
+    )
+    context = CaptureContext(
+        today="2026-08-04",
+        timezone="Asia/Kolkata",
+        accounts=[CaptureAccount(id="known-id", name="Known Bank", kind="bank")],
+    )
+
+    with pytest.raises(CaptureInterpretationError) as captured:
+        await assistant.interpret_capture_or_raise("fictional capture", context)
+
+    assert captured.value.kind is CaptureFailureKind.RATE_LIMITED
+    assert captured.value.retryable is True
+    assert captured.value.retry_after_seconds == 23.0
+    assert str(captured.value) == "rate_limited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_error", "expected_kind"),
+    [
+        (
+            interaction_errors.APITimeoutError(
+                httpx.Request("POST", "https://gemini.invalid/interactions")
+            ),
+            CaptureFailureKind.TIMEOUT,
+        ),
+        (
+            interaction_errors.APIConnectionError(
+                request=httpx.Request(
+                    "POST", "https://gemini.invalid/interactions"
+                )
+            ),
+            CaptureFailureKind.NETWORK,
+        ),
+    ],
+)
+async def test_interactions_transport_failures_are_retryable_for_capture(
+    provider_error: Exception,
+    expected_kind: CaptureFailureKind,
+) -> None:
+    assistant = LocalFinancialAssistant(
+        AssistantSettings(
+            provider=LlmProvider.GEMINI,
+            gemini_api_key="gemini-test-key",
+        ),
+        gemini_client=FailingGeminiClient(provider_error),
+    )
+    context = CaptureContext(
+        today="2026-08-04",
+        timezone="Asia/Kolkata",
+        accounts=[CaptureAccount(id="known-id", name="Known Bank", kind="bank")],
+    )
+
+    with pytest.raises(CaptureInterpretationError) as captured:
+        await assistant.interpret_capture_or_raise("fictional capture", context)
+
+    assert captured.value.kind is expected_kind
+    assert captured.value.retryable is True
+    assert captured.value.retry_after_seconds is None
+    assert str(captured.value) == expected_kind.value
+
+
+@pytest.mark.asyncio
 async def test_capture_interpretation_rejects_invented_account_id() -> None:
     context = CaptureContext(
         today="2026-08-04",
@@ -1129,6 +1242,24 @@ async def test_invalid_model_payload_makes_assistant_unavailable(
 
 
 @pytest.mark.asyncio
+async def test_interactions_rate_limit_makes_assistant_unavailable(
+    financial_context: AssistantFinancialContext,
+) -> None:
+    assistant = LocalFinancialAssistant(
+        AssistantSettings(
+            provider=LlmProvider.GEMINI,
+            gemini_api_key="gemini-test-key",
+        ),
+        gemini_client=RateLimitedGeminiClient(),
+    )
+
+    with pytest.raises(
+        AssistantUnavailableError, match="AI assistant is unavailable"
+    ):
+        await assistant.chat("Show spending", financial_context)
+
+
+@pytest.mark.asyncio
 async def test_gemini_tag_suggestion_is_grounded_in_allowed_categories() -> None:
     suggestion = {
         "category_id": "food",
@@ -1210,6 +1341,29 @@ async def test_invented_tag_makes_category_suggestion_unavailable() -> None:
         AssistantSettings(provider=LlmProvider.OLLAMA),
         transport=httpx.MockTransport(handler),
     )
+    with pytest.raises(
+        AssistantUnavailableError, match="AI category suggestion is unavailable"
+    ):
+        await assistant.suggest_tag(
+            TagSuggestionRequest(
+                description="Unknown merchant",
+                amount_paise=5000,
+                direction="expense",
+                allowed_categories=[TagCategory(id="food", name="Food")],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_interactions_rate_limit_makes_tag_suggestion_unavailable() -> None:
+    assistant = LocalFinancialAssistant(
+        AssistantSettings(
+            provider=LlmProvider.GEMINI,
+            gemini_api_key="gemini-test-key",
+        ),
+        gemini_client=RateLimitedGeminiClient(),
+    )
+
     with pytest.raises(
         AssistantUnavailableError, match="AI category suggestion is unavailable"
     ):

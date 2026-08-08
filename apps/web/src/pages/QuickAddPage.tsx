@@ -1,18 +1,22 @@
 import { ArrowLeft, Check, ChevronRight, Info, RotateCcw, ShieldCheck, Sparkles, UsersRound } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Badge, Button, Card } from '../components/ui'
-import { CaptureDraftUnavailableError, getCaptureContext, parseDraft } from '../lib/api'
+import { CaptureClarificationCard } from '../components/CaptureClarificationCard'
+import { TransactionMetadataReview } from '../components/TransactionMetadataReview'
+import { CaptureDraftUnavailableError, getCaptureContext, isCaptureClarification, parseDraft } from '../lib/api'
 import { formatMoney, rupeesToPaise } from '../lib/money'
 import { localDateOffset } from '../lib/date'
 import { useRouter } from '../lib/router'
-import type { CaptureCategory, CaptureContext, HouseholdMember, LedgerAccount, Transaction, TransactionDraft, TransactionKind } from '../types'
+import type { CaptureCategory, CaptureChoice, CaptureClarification, CaptureContext, HouseholdMember, LedgerAccount, Transaction, TransactionDraft, TransactionKind } from '../types'
 
 export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: TransactionDraft, idempotencyKey?: string) => Promise<Transaction>; members: HouseholdMember[] }) {
   const { state, navigate, back } = useRouter()
   const initialCapture = (state as { capture?: string } | null)?.capture ?? ''
   const [capture, setCapture] = useState(initialCapture)
   const [draft, setDraft] = useState<TransactionDraft | null>(null)
+  const [clarification, setClarification] = useState<CaptureClarification | null>(null)
   const [parsing, setParsing] = useState(false)
+  const [parseStatusIndex, setParseStatusIndex] = useState(0)
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState<Transaction | null>(null)
   const [error, setError] = useState('')
@@ -50,6 +54,17 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
     manualRecoveryFocusPending.current = false
   }, [draft])
 
+  useEffect(() => {
+    if (!parsing) {
+      setParseStatusIndex(0)
+      return
+    }
+    const timer = window.setInterval(() => {
+      setParseStatusIndex((current) => Math.min(current + 1, 2))
+    }, 650)
+    return () => window.clearInterval(timer)
+  }, [parsing])
+
   async function makeDraft(text = capture) {
     if (!text.trim()) return
     const generation = ++parseGeneration.current
@@ -58,6 +73,13 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
     try {
       const response = await parseDraft(text, members)
       if (generation !== parseGeneration.current) return
+      if (isCaptureClarification(response.data)) {
+        setDraft(null)
+        setClarification(response.data)
+        setUsedFallback(false)
+        return
+      }
+      setClarification(null)
       setDraft(groundDraft(response.data, contextRef.current))
       setUsedFallback(response.demo)
     } catch (caught) {
@@ -96,6 +118,7 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
     invalidatePendingParse()
     setCapture('')
     setDraft(null)
+    setClarification(null)
     setSuccess(null)
     confirmationAttempt.current = null
     setError('')
@@ -107,6 +130,7 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
     const firstAccount = loadedContext?.accounts[0]
     const firstCategory = categoriesForKind(loadedContext, 'debit')[0]
     setDraft({ kind: 'debit', amountPaise: 0, merchant: '', category: firstCategory?.name ?? '', account: firstAccount?.name ?? '', sourceAccountId: firstAccount?.id, occurredAt: localDateOffset(0), note: '', memberSplits: [], confidence: 'review', sourceText })
+    setClarification(null)
     setUsedFallback(false)
     setError('')
   }
@@ -143,7 +167,12 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
           sourceAccountId: source?.id,
           destinationAccount: undefined,
           destinationAccountId: undefined,
-          memberSplits: []
+          memberSplits: [],
+          platform: undefined,
+          subcategory: undefined,
+          categorySuggestion: undefined,
+          metadata: undefined,
+          tags: undefined
         }
       }
       const categories = categoriesForKind(loadedContext, kind)
@@ -156,7 +185,14 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
         sourceAccountId: source?.id,
         destinationAccount: undefined,
         destinationAccountId: undefined,
-        memberSplits: kind === 'credit' ? [] : current.memberSplits
+        memberSplits: kind === 'credit' ? [] : current.memberSplits,
+        ...(kind === 'credit' ? {
+          platform: undefined,
+          subcategory: undefined,
+          categorySuggestion: undefined,
+          metadata: undefined,
+          tags: undefined
+        } : {})
       }
     })
   }
@@ -174,6 +210,14 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
   function editDraft(nextDraft: TransactionDraft) {
     invalidatePendingParse()
     setDraft(nextDraft)
+  }
+
+  function chooseClarification(choice: CaptureChoice) {
+    if (!clarification || parsing) return
+    const continuedText = `${clarification.sourceText}; ${choice.answer}`
+    setCapture(continuedText)
+    setClarification(null)
+    void makeDraft(continuedText)
   }
 
   if (success) {
@@ -200,6 +244,15 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
   const selectedCategory = draft ? matchingCategory(categoryOptions, draft.category) : undefined
   const confirmationDisabled = !draft || !canConfirmDraft(draft, context, contextStatus)
   const confirmationBlocker = draft ? confirmationBlockerFor(draft, context, contextStatus) : ''
+  const showsMetadataReview = Boolean(
+    draft?.kind === 'debit'
+    && (draft.metadata || draft.platform || draft.subcategory || draft.categorySuggestion || draft.tags?.length)
+  )
+  const parseStatuses = [
+    'Reading the amount, date and description…',
+    'Matching your accounts, category and shared context…',
+    'Preparing a review you can edit before anything is saved…'
+  ]
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -210,13 +263,14 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
         <p className="mt-2 text-sm text-[#718078] tone-muted">Write naturally. You’ll review every detail before it is saved.</p>
       </div>
 
-      <div role="note" aria-label="Fictional-pilot AI notice" className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100"><strong>Fictional pilot.</strong> Submitted text is sent through the Artha server to the configured Gemini model. Do not enter real family-finance data. <a href="/settings" className="font-semibold underline underline-offset-2">Settings</a> has details.</div>
+      <div role="note" aria-label="AI-assisted capture" className="mb-4 rounded-2xl border border-moss-200 bg-moss-50 px-4 py-3 text-xs leading-5 text-moss-900 dark:border-night-border dark:bg-night-raised dark:text-night-ink"><strong>AI-assisted.</strong> Artha sends this text to the configured AI provider to prepare a reviewable result. Nothing is written to your ledger until you confirm. <a href="/settings" className="font-semibold underline underline-offset-2">Settings</a> has details.</div>
 
       <Card className="p-4 sm:p-5">
         <label htmlFor="capture" className="text-xs font-bold uppercase tracking-[0.12em] text-[#78847e] tone-muted">Your message</label>
-        <textarea id="capture" name="transaction-capture" autoComplete="off" rows={3} value={capture} onChange={(event) => { invalidatePendingParse(); setCapture(event.target.value) }} placeholder={`${members[0] ? `Paid 1,840 for groceries yesterday, split with ${members[0].name}` : 'Paid 1,840 for groceries yesterday'}…`} className="mt-2 w-full resize-none rounded-2xl border border-line bg-[#fafbf9] p-4 text-base leading-6 outline-none transition placeholder:text-[#a0aaa4] tone-subtle focus-visible:border-moss-400 focus-visible:ring-4 focus-visible:ring-moss-100 dark:bg-night-input" />
+        <textarea id="capture" name="transaction-capture" autoComplete="off" rows={3} value={capture} onChange={(event) => { invalidatePendingParse(); setCapture(event.target.value) }} onKeyDown={(event) => { if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return; event.preventDefault(); if (!capture.trim() || parsing) return; void makeDraft() }} placeholder={`${members[0] ? `Paid 1,840 for groceries yesterday, split with ${members[0].name}` : 'Paid 1,840 for groceries yesterday'}…`} className="mt-2 w-full resize-none rounded-2xl border border-line bg-[#fafbf9] p-4 text-base leading-6 outline-none transition placeholder:text-[#a0aaa4] tone-subtle focus-visible:border-moss-400 focus-visible:ring-4 focus-visible:ring-moss-100 dark:bg-night-input" />
+        <p className="mt-2 text-xs text-[#7b8781] tone-muted">Enter to continue · Shift+Enter for a new line.</p>
         <div className="mt-3 grid gap-2 sm:flex"><Button className="w-full sm:w-auto" disabled={!capture.trim()} loading={parsing} onClick={() => void makeDraft()}>Create review draft <ChevronRight className="h-4 w-4" aria-hidden="true" /></Button><Button variant="secondary" className="w-full sm:w-auto" onClick={() => startManualEntry()}>Enter details manually</Button></div>
-        {!draft && (
+        {!draft && !clarification && (
           <div className="mt-5 border-t border-line pt-4">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[#8a958f] tone-subtle">Try an example</p>
             <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
@@ -226,10 +280,21 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
         )}
       </Card>
 
+      {parsing && <p role="status" aria-live="polite" className="mt-4 rounded-2xl border border-moss-200 bg-moss-50 px-4 py-3 text-sm text-moss-900 dark:border-night-border dark:bg-night-raised dark:text-night-ink">✨ {parseStatuses[parseStatusIndex]}</p>}
+
       {contextStatus === 'loading' && <p role="status" aria-live="polite" className="mt-4 rounded-2xl border border-line bg-white px-4 py-3 text-sm text-[#66736d] tone-muted">Loading accounts and categories…</p>}
       {contextStatus === 'error' && <div role="alert" aria-live="assertive" className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><p>{contextError}</p><Button variant="secondary" className="mt-3" onClick={() => void loadContext()}>Try again</Button></div>}
 
       {error && <div role="alert" aria-live="polite" className="mt-4 break-words rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>}
+
+      {clarification && (
+        <CaptureClarificationCard
+          clarification={clarification}
+          busy={parsing}
+          onChoose={chooseClarification}
+          onManual={() => startManualEntry(clarification.sourceText)}
+        />
+      )}
 
       {draft && (
         <section className="mt-5" aria-labelledby="review-heading">
@@ -257,15 +322,32 @@ export function QuickAddPage({ onConfirm, members }: { onConfirm: (draft: Transa
                   {([['Expense', 'debit'], ['Income', 'credit'], ['Transfer', 'transfer']] as const).map(([label, kind]) => <label key={kind} className={`flex min-h-11 cursor-pointer items-center justify-center rounded-xl border px-3 text-sm font-semibold transition ${draft.kind === kind ? 'border-moss-700 bg-moss-100 text-moss-900' : 'border-line bg-white text-[#68756e] tone-muted'}`}><input className="sr-only" type="radio" name="transaction-type" value={kind} checked={draft.kind === kind} onChange={() => changeKind(kind)} />{label}</label>)}
                 </div>
               </fieldset>
-              <DraftField label="Description" value={draft.merchant} required maxLength={240} onChange={(value) => editDraft({ ...draft, merchant: value })} />
+              {!showsMetadataReview && <DraftField label="Description" value={draft.merchant} required maxLength={240} onChange={(value) => editDraft({ ...draft, merchant: value })} />}
               {draft.kind === 'transfer'
                 ? <ReadOnlyField label="Category" value="Transfer" />
-                : <CategoryField categories={categoryOptions} selected={selectedCategory} onChange={(category) => editDraft({ ...draft, category: category.name })} />}
+                : <CategoryField categories={categoryOptions} selected={selectedCategory} onChange={(category) => editDraft({
+                    ...draft,
+                    category: category.name,
+                    categorySuggestion: undefined,
+                    metadata: draft.metadata ? {
+                      ...draft.metadata,
+                      evidence: {
+                        ...draft.metadata.evidence,
+                        category: {
+                          source: 'user_corrected',
+                          confidence: 1,
+                          reviewStatus: 'needs_review'
+                        }
+                      }
+                    } : draft.metadata
+                  })} />}
               <AccountField label={draft.kind === 'transfer' ? 'Transfer from' : draft.kind === 'credit' ? 'Received in' : 'Paid from'} ariaLabel={draft.kind === 'transfer' ? 'Transfer from account' : draft.kind === 'credit' ? 'Received in account' : 'Paid from account'} accounts={accounts} selectedId={draft.sourceAccountId} onChange={(account) => editDraft({ ...draft, account: account.name, sourceAccountId: account.id })} />
               {draft.kind === 'transfer' && <AccountField label="Transfer to" ariaLabel="Transfer to account" accounts={accounts} selectedId={draft.destinationAccountId} onChange={(account) => editDraft({ ...draft, destinationAccount: account.name, destinationAccountId: account.id })} />}
               <DateField value={draft.occurredAt} onChange={(value) => editDraft({ ...draft, occurredAt: value })} />
               {draft.kind === 'transfer' && (!draft.destinationAccountId || sameEntityId(draft.destinationAccountId, draft.sourceAccountId)) && <p className="mb-4 text-xs text-amber-800 sm:col-span-2">Choose a destination account that is different from the source.</p>}
             </div>
+
+            {showsMetadataReview && <TransactionMetadataReview draft={draft} onChange={editDraft} />}
 
             {draft.kind === 'debit' && members.length > 0 && <div className="mx-5 mb-5 rounded-2xl border border-moss-200 bg-moss-50 p-4">
               <div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-moss-800"><UsersRound className="h-4 w-4" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Share this expense</span><span className="mt-0.5 block text-xs text-[#748079] tone-muted">Choose anyone involved. Shares are equal in V1.</span></span></div>

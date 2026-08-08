@@ -110,9 +110,9 @@ export function OnboardingPage({ onSave, onExploreDemo, onRestored, allowDemo = 
     setSaving(true)
     setError('')
     try {
-      await onSave(preparedAccounts, { displayName: displayName.trim() || 'You', householdName: householdName.trim() || 'My household', members: memberRows.map((member) => ({ id: `draft-${member.id}`, name: member.name.trim() })) })
+      await onSave(preparedAccounts, { displayName: displayName.trim() || 'You', householdName: householdName.trim() || 'My household', members: memberRows.map((member) => ({ id: `draft-${member.id}`, name: member.name.trim() })), isDemo: false })
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Setup could not be saved. Try again or explore the fictional demo.')
+      setError(caught instanceof Error ? caught.message : 'Setup could not be saved. Try again or explore the sample demo.')
     } finally {
       setSaving(false)
     }
@@ -122,7 +122,7 @@ export function OnboardingPage({ onSave, onExploreDemo, onRestored, allowDemo = 
     setDemoLoading(true)
     setError('')
     try {
-      await onExploreDemo({ displayName: displayName.trim() || 'You', householdName: householdName.trim() || 'My household', members: memberRows.map((member) => ({ id: `draft-${member.id}`, name: member.name.trim() })).filter((member) => member.name) })
+      await onExploreDemo({ displayName: displayName.trim() || 'You', householdName: householdName.trim() || 'My household', members: memberRows.map((member) => ({ id: `draft-${member.id}`, name: member.name.trim() })).filter((member) => member.name), isDemo: true })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'The demo could not be prepared. Please try again.')
     } finally {
@@ -221,10 +221,10 @@ export function OnboardingPage({ onSave, onExploreDemo, onRestored, allowDemo = 
 
             {error && <ErrorMessage message={error} focusRef={errorRef} />}
             <div className={`mt-8 grid gap-3 sm:items-center ${allowDemo ? 'sm:grid-cols-[1fr_auto]' : 'sm:justify-end'}`}>
-              {allowDemo && <Button variant="ghost" loading={demoLoading} onClick={() => void exploreDemo()} className="order-2 sm:order-1 sm:justify-self-start">Explore fictional demo</Button>}
+              {allowDemo && <Button variant="ghost" loading={demoLoading} onClick={() => void exploreDemo()} className="order-2 sm:order-1 sm:justify-self-start">Explore sample demo</Button>}
               <Button onClick={continueToReview} className="order-1 sm:order-2 sm:px-7">Review setup <ArrowRight className="h-4 w-4" aria-hidden="true" /></Button>
             </div>
-            {allowDemo && <p className="mt-3 text-center text-[11px] text-[#87928c] tone-subtle sm:text-right">Demo data is fictional and can be cleared later.</p>}
+            {allowDemo && <p className="mt-3 text-center text-[11px] text-[#87928c] tone-subtle sm:text-right">Sample data can be cleared whenever you are ready.</p>}
           </>
         ) : (
           <div className="mt-10 sm:mt-14">

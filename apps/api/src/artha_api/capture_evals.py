@@ -231,6 +231,8 @@ def _safe_actual(result: CaptureInterpretation) -> dict[str, object]:
         "outcome",
         "kind",
         "amount_paise",
+        "platform",
+        "subcategory",
         "category_id",
         "source_account_id",
         "destination_account_id",
@@ -239,7 +241,20 @@ def _safe_actual(result: CaptureInterpretation) -> dict[str, object]:
         "occurred_on",
         "missing",
     }
-    return {key: value for key, value in raw.items() if key in allowed_fields}
+    safe = {key: value for key, value in raw.items() if key in allowed_fields}
+    attributes = raw.get("attributes")
+    if isinstance(attributes, list):
+        safe["attributes"] = [
+            {"key": item.get("key"), "value": item.get("value")}
+            for item in attributes
+            if isinstance(item, dict)
+        ]
+    tags = raw.get("tags")
+    if isinstance(tags, list):
+        safe["tags"] = [
+            item.get("name") for item in tags if isinstance(item, dict)
+        ]
+    return safe
 
 
 def score_capture_case(
@@ -369,6 +384,10 @@ def load_checkpoint(suite: CaptureEvalSuite, path: Path) -> tuple[CaseScore, ...
         "outcome",
         "kind",
         "amount_paise",
+        "platform",
+        "subcategory",
+        "attributes",
+        "tags",
         "category_id",
         "source_account_id",
         "destination_account_id",
@@ -404,6 +423,41 @@ def load_checkpoint(suite: CaptureEvalSuite, path: Path) -> tuple[CaseScore, ...
             actual_object = _object(raw_actual, label="checkpoint actual")
             if any(key not in allowed_actual_fields for key in actual_object):
                 raise ValueError("capture evaluation checkpoint contains unsafe actual fields")
+            platform = actual_object.get("platform")
+            if platform is not None and (
+                not isinstance(platform, str) or not platform.strip() or len(platform) > 100
+            ):
+                raise ValueError("capture evaluation checkpoint contains an unsafe platform")
+            subcategory = actual_object.get("subcategory")
+            if subcategory is not None and (
+                not isinstance(subcategory, str)
+                or not subcategory.strip()
+                or len(subcategory) > 80
+            ):
+                raise ValueError("capture evaluation checkpoint contains an unsafe subcategory")
+            attributes = actual_object.get("attributes", [])
+            if not isinstance(attributes, list) or len(attributes) > 8:
+                raise ValueError("capture evaluation checkpoint contains unsafe attributes")
+            for item in attributes:
+                attribute = _object(item, label="checkpoint attribute")
+                if set(attribute) != {"key", "value"} or attribute.get("key") not in {
+                    "meal_occasion",
+                    "order_channel",
+                }:
+                    raise ValueError("capture evaluation checkpoint contains unsafe attributes")
+                value = attribute.get("value")
+                if not isinstance(value, str) or not value.strip() or len(value) > 80:
+                    raise ValueError("capture evaluation checkpoint contains unsafe attributes")
+            tags = actual_object.get("tags", [])
+            if (
+                not isinstance(tags, list)
+                or len(tags) > 8
+                or any(
+                    not isinstance(item, str) or not item.strip() or len(item) > 60
+                    for item in tags
+                )
+            ):
+                raise ValueError("capture evaluation checkpoint contains unsafe tags")
             actual = cast(dict[str, object], actual_object)
         raw_failure = record.get("failure_kind")
         failure_kind = (

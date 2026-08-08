@@ -18,7 +18,7 @@ import type { AccountSetupInput, Dashboard, Transaction, TransactionDraft, UserP
 
 const SETUP_KEY = 'artha.setup.complete'
 const PROFILE_KEY = 'artha.profile'
-const defaultProfile: UserProfile = { displayName: 'You', householdName: 'My household', members: [] }
+const defaultProfile: UserProfile = { displayName: 'You', householdName: 'My household', members: [], isDemo: false }
 const emptyDashboard: Dashboard = {
   availablePaise: 0,
   incomePaise: 0,
@@ -121,11 +121,16 @@ function loadProfile(profileKey: string): UserProfile {
     return {
       displayName: parsed.displayName?.trim() || defaultProfile.displayName,
       householdName: parsed.householdName?.trim() || defaultProfile.householdName,
-      members: Array.isArray(parsed.members) ? parsed.members.filter((member) => member && typeof member.id === 'string' && typeof member.name === 'string') : []
+      members: Array.isArray(parsed.members) ? parsed.members.filter((member) => member && typeof member.id === 'string' && typeof member.name === 'string') : [],
+      isDemo: parsed.isDemo === true
     }
   } catch {
     return defaultProfile
   }
+}
+
+export function isDemoExperience(localDemo: boolean, profile: UserProfile): boolean {
+  return localDemo || profile.isDemo
 }
 
 function persistSetup(profile: UserProfile, profileKey: string, setupKey: string) {
@@ -137,7 +142,7 @@ export default function App() {
   const auth = useAuth()
   if (auth.status === 'loading') return <SessionLoadingPage />
   if (auth.status === 'unauthenticated' || auth.status === 'error') {
-    return <LoginPage configurationError={auth.status === 'error' ? auth.error : null} recovery={auth.recovery} onSendLink={auth.signInWithMagicLink} />
+    return <LoginPage configurationError={auth.status === 'error' ? auth.error : null} recovery={auth.recovery} onSendLink={auth.signInWithMagicLink} onPasswordSignIn={auth.signInWithPassword} />
   }
   const userKey = auth.user?.id
   return <LedgerApp key={userKey ?? 'demo'} userKey={userKey} userEmail={auth.user?.email} onSignOut={auth.status === 'authenticated' ? auth.signOut : undefined} />
@@ -154,7 +159,6 @@ function LedgerApp({ userKey, userEmail, onSignOut }: { userKey?: string; userEm
   const [profile, setProfile] = useState<UserProfile>(() => loadProfile(profileKey))
   const [dashboard, setDashboard] = useState<Dashboard>(() => localDemo ? demoDashboard : emptyDashboard)
   const [transactions, setTransactions] = useState<Transaction[]>(() => localDemo ? demoTransactions : [])
-  const [demoMode, setDemoMode] = useState(localDemo)
   const [loadingLedger, setLoadingLedger] = useState(setupComplete)
   const [ledgerIssue, setLedgerIssue] = useState<LedgerLoadIssue | null>(null)
 
@@ -184,7 +188,6 @@ function LedgerApp({ userKey, userEmail, onSignOut }: { userKey?: string; userEm
       const [dashboardResponse, transactionsResponse] = await Promise.all([getDashboard(), getTransactions()])
       setDashboard(dashboardResponse.data)
       setTransactions(transactionsResponse.data)
-      setDemoMode(dashboardResponse.demo || transactionsResponse.demo)
     } catch (error) {
       setLedgerIssue(ledgerLoadIssue(error, 'ledger'))
     } finally {
@@ -236,6 +239,7 @@ function LedgerApp({ userKey, userEmail, onSignOut }: { userKey?: string; userEm
   if (loadingLedger) return <SessionLoadingPage />
   if (ledgerIssue) return <LedgerLoadError issue={ledgerIssue} onRetry={refreshLedger} onSignOut={onSignOut} />
 
+  const demoMode = isDemoExperience(localDemo, profile)
   let page = <HomePage dashboard={dashboard} demoMode={demoMode} profile={profile} />
   if (path === '/transactions') page = <TransactionsPage transactions={transactions} demoMode={demoMode} />
   if (path === '/shared') page = <SharedPage transactions={transactions} sharedBalancePaise={dashboard.sharedBalancePaise} memberBalances={dashboard.memberBalances} demoMode={demoMode} profile={profile} />
@@ -275,7 +279,7 @@ export function LedgerLoadError({ issue, onRetry, onSignOut }: { issue: LedgerLo
           </button>
           {onSignOut && <button onClick={() => void onSignOut()} className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-line bg-white px-5 text-sm font-semibold transition hover:border-moss-300 hover:bg-moss-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-moss-400 focus-visible:ring-offset-2 dark:bg-night-surface dark:hover:bg-night-raised"><LogOut className="h-4 w-4" aria-hidden="true" />{issue.signOutLabel}</button>}
         </div>
-        <p className="mt-5 text-xs leading-5 text-[#7b8881] tone-muted">If retry keeps failing, sign in again. Artha never substitutes fictional balances for a failed private ledger.</p>
+        <p className="mt-5 text-xs leading-5 text-[#7b8881] tone-muted">If retry keeps failing, sign in again. Artha never substitutes sample balances for a failed private ledger.</p>
       </div>
     </main>
   )

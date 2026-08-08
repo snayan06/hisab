@@ -1,6 +1,6 @@
 # Artha
 
-[![Release: private pilot](https://img.shields.io/badge/release-private_pilot-2f6f4e.svg)](https://artha-web-one.vercel.app)
+[![Release: production](https://img.shields.io/badge/release-production-2f6f4e.svg)](https://artha-web-one.vercel.app)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2f6f4e.svg)](LICENSE)
 [![Python 3.13](https://img.shields.io/badge/Python-3.13-3776AB.svg)](https://www.python.org/)
 [![React 19](https://img.shields.io/badge/React-19-149ECA.svg)](https://react.dev/)
@@ -11,11 +11,10 @@ language, review the draft, and let Artha keep accounts, cards, transfers and
 shared family expenses consistent.
 
 > [!IMPORTANT]
-> **Private-pilot status:** V1 is deployed and has passed real final-domain
-> sign-in, onboarding, capture, transfer, shared-expense, assistant, encrypted
-> export and responsive tests using fictional data. Keep using fictional data
-> until the two-owner isolation and final-domain restore drills are also signed
-> off.
+> **Production status:** Artha is live for personal testing. The designated demo
+> account uses sample data; ordinary accounts use their own isolated ledger.
+> Keep real financial data out until the remaining two-owner isolation, restore,
+> and provider-privacy acceptance checks are signed off.
 
 ## Product at a glance
 
@@ -26,7 +25,7 @@ shared family expenses consistent.
 | **Promise** | Capture a transaction in seconds, see exactly what Artha understood, and save only after explicit confirmation |
 | **Current scope** | A private personal ledger with non-login participants for expense splits |
 | **Next scope** | Post-onboarding account management, audited corrections and invited family access |
-| **Live pilot** | [Web app](https://artha-web-one.vercel.app) · [API health](https://artha-api-mu.vercel.app/health) |
+| **Live app** | [Web app](https://artha-web-one.vercel.app) · [API health](https://artha-api-mu.vercel.app/health) |
 
 ## Why Artha?
 
@@ -57,8 +56,8 @@ capture itself feel like accounting.
 2. **Write naturally.** Try `self transfer 25k ICICI -> HDFC` or
    `Paid 1840 for groceries from HDFC, split with Krima, 3 days ago`.
 3. **Review before saving.** Check the displayed transaction type, then correct
-   the amount, description, category, account, date or equal-split member
-   selection. Nothing reaches the ledger until confirmation.
+   the amount, merchant, platform, category, context, optional tags, account,
+   date or equal-split member selection. Nothing reaches the ledger until confirmation.
 4. **Understand the result.** See balances, personal spending, income, account
    activity, shared receivables and a six-month trend.
 5. **Ask the ledger.** Gemini selects one supported intent, then must return that
@@ -76,6 +75,10 @@ the assistant shows an honest error when its model is unavailable.
 ### Fast capture and correct accounting
 
 - Natural-language INR capture with a review-before-write workflow.
+- One-question continuation with grounded account choices and a safe full-form
+  recovery when another required detail is missing.
+- Reviewed merchant, platform, subcategory, meal/order context and optional
+  explicit tags stored as bounded versioned transaction metadata.
 - Indian amount shorthand and account-to-account transfer capture such as
   `self transfer 25k ICICI -> HDFC`.
 - Accounts, opening balances, income, expenses and transfers. The settlement
@@ -91,6 +94,8 @@ the assistant shows an honest error when its model is unavailable.
 - First-run setup for multiple bank, cash, wallet and credit-card accounts.
 - Equal expense splits across the selected household participants.
 - Read-only Gemini assistant with safe inline metrics, charts and tables.
+- Honest progress messages while capture and Ask Artha prepare reviewable results;
+  private model chain-of-thought is never displayed.
 - Light, dark and system theme support across mobile and desktop.
 
 ### Privacy, reliability and portability
@@ -111,9 +116,12 @@ paise rather than floating-point values.
 
 ## Architecture
 
-![Artha review-before-save architecture](docs/assets/artha-architecture.svg)
+![Artha product architecture: capture, review, ledger and read-only assistant](docs/assets/artha-architecture.svg)
 
-[Open the editable Excalidraw board.](docs/assets/artha-architecture.excalidraw)
+[Open the editable overview](docs/assets/artha-architecture.excalidraw) or
+[browse the complete architecture pack](docs/artifacts/architecture/README.md),
+including focused boards for capture and metadata, ledger and shared money,
+identity isolation, Ask Artha, and deployment and recovery.
 
 Gemini interprets authenticated household context, but strict application code
 owns every trust boundary: schemas, allowed IDs, integer-paise and split maths,
@@ -153,7 +161,7 @@ artha/
 │   ├── migrations/       # Schema, constraints, RLS and RPC functions
 │   └── tests/            # SQL catalog assertions
 ├── docs/                 # PRD, architecture, deployment, decisions and assets
-├── evals/                # Versioned fictional model/parser evaluation data
+├── evals/                # Versioned sanitized model/parser evaluation data
 ├── scripts/              # Repository contract and evaluation helpers
 ├── .github/workflows/    # CI
 └── render.yaml           # Optional container-hosting fallback
@@ -190,10 +198,10 @@ make dev-web
 Open <http://127.0.0.1:5173>. Interactive API documentation is available at
 <http://127.0.0.1:8000/docs>.
 
-### Gemini in the private pilot
+### Gemini in production
 
 Production natural-language capture and the assistant require configured
-Gemini. The current pilot model is `gemini-3.5-flash-lite`, called only from the
+Gemini. The current model is `gemini-3.5-flash-lite`, called only from the
 server through the official SDK. It is not trusted to write or calculate ledger
 values. Keep the API key only in the server environment:
 
@@ -211,9 +219,9 @@ than fabricating an answer. Manual entry and database-backed dashboards remain
 available without an LLM.
 
 Google's free tier may use submitted content to improve its products, so use
-fictional data on the free tier; real family finance should use an appropriate
+sample/test data on the free tier; real family finance should use an appropriate
 paid privacy configuration. Developers may explicitly select Ollama for local
-experimentation, but it is not part of the production pilot path.
+experimentation, but it is not part of the production runtime.
 
 ## Quality gate
 
@@ -225,16 +233,16 @@ make check
 
 This runs web linting, TypeScript checks, Vitest, the production PWA build,
 Ruff, strict mypy, pytest, every SQL syntax contract, and both keyless validators
-for the 50-case capture dataset and hosted-model runner.
+for the 60-case capture dataset and hosted-model runner.
 
-Previous release evidence (recorded before the current documentation pass):
+Current local release-candidate evidence:
 
 | Gate | Result |
 | --- | --- |
-| Web | 16 test files, 103 tests passed |
-| API | 122 tests passed |
-| AI contracts | 50 capture, 30 auto-tag and 24 assistant cases valid |
-| Hosted Gemini on fictional data | 50/50 capture, 30/30 auto-tag, 24/24 assistant |
+| Web | 19 test files, 184 tests passed |
+| API | 254 tests passed |
+| AI contracts | 60 capture, 30 auto-tag and 24 assistant cases valid |
+| Hosted Gemini on sample data | Prior deployed baseline: 50/50 capture, 30/30 auto-tag, 24/24 assistant; the new 60-case hosted rerun is pending |
 | Production UI | All six primary pages fit at 320 px, 390 px and 1440 px; light/dark controls and mobile/desktop dark UI verified |
 | Production flows | Magic-link new/returning login, session persistence, onboarding, expense, income, transfer, split, filters, assistant and encrypted export passed |
 
@@ -243,13 +251,13 @@ Previous release evidence (recorded before the current documentation pass):
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/health` | Service health and API version |
-| `POST` | `/api/v1/demo/bootstrap` | Create fictional local demo data |
+| `POST` | `/api/v1/demo/bootstrap` | Create sample local demo data |
 | `GET/POST` | `/api/v1/accounts` | List or create accounts |
 | `POST` | `/api/v1/onboarding/setup` | Atomically create accounts and household members |
 | `GET` | `/api/v1/profile` | Load the authenticated user's server-owned profile and household |
 | `GET/POST` | `/api/v1/members` | List or create household participants |
-| `GET/POST` | `/api/v1/merchant-rules` | Manage stored household rules; production Quick Add integration is planned |
-| `POST` | `/api/v1/merchant-rules/learn` | Store a prospective rule; production Quick Add integration is planned |
+| `GET/POST` | `/api/v1/merchant-rules` | Manage prospective household rules used by Quick Add |
+| `POST` | `/api/v1/merchant-rules/learn` | Store a prospective rule for future suggestions |
 | `POST` | `/api/v1/drafts/parse` | Parse an unsaved transaction draft |
 | `POST` | `/api/v1/transactions/confirm` | Confirm a reviewed draft idempotently |
 | `GET` | `/api/v1/transactions` | List confirmed transactions |
@@ -265,14 +273,14 @@ Previous release evidence (recorded before the current documentation pass):
 
 ## Deployment status
 
-The private-pilot topology is live: two Vercel Hobby projects (`apps/web` and
+The production topology uses two Vercel Hobby projects (`apps/web` and
 `apps/api`) plus the personal `artha-production` Supabase Free project. The
 previous Cloudflare Pages + Render path remains an optional container fallback.
 
 - PWA: <https://artha-web-one.vercel.app>
 - API health: <https://artha-api-mu.vercel.app/health>
 
-The deployed fictional-data acceptance pass now covers new and returning
+The deployed sample-data acceptance pass now covers new and returning
 magic-link users, persisted sessions, multi-account onboarding, financial
 flows, Gemini capture/assistant behavior, encrypted export, responsive layouts
 and security headers.
@@ -280,7 +288,7 @@ and security headers.
 Before entering real financial data:
 
 - prove two independent owners cannot read or write each other's households;
-- restore the encrypted fictional backup into a fresh/empty production household;
+- restore the encrypted sample backup into a fresh/empty production household;
 - record sanitized authenticated cold/warm latency and log-redaction evidence.
 
 See [the deployment runbook](docs/DEPLOYMENT.md) for the complete acceptance gate.
@@ -309,7 +317,7 @@ screenshots. Report vulnerabilities according to [SECURITY.md](SECURITY.md).
 
 - [Current project checkpoint](docs/PROJECT-CHECKPOINT.md)
 - [Product requirements](docs/product-requirements.md)
-- [Private-pilot product audit and priority reset](docs/product-audit-2026-08-04.md)
+- [Product audit and priority reset](docs/product-audit-2026-08-04.md)
 - [System architecture](docs/system-architecture.md)
 - [Database structure](docs/database-schema.md)
 - [Auto-tagging design](docs/auto-tagging.md)

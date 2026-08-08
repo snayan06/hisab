@@ -1,5 +1,5 @@
 import { demoDashboard, demoTransactions } from '../data/demo'
-import type { AccountSetupInput, AssistantReply, AssistantWidget, CaptureAccount, CaptureCategory, CaptureContext, Dashboard, HouseholdMember, LedgerAccount, MemberBalance, MonthlyPoint, Transaction, TransactionDraft, UserProfile } from '../types'
+import type { AccountSetupInput, AssistantReply, AssistantRuntimeStatus, AssistantWidget, CaptureAccount, CaptureCategory, CaptureClarification, CaptureContext, CaptureResult, Dashboard, HouseholdMember, LedgerAccount, MemberBalance, MonthlyPoint, Transaction, TransactionDraft, UserProfile } from '../types'
 import { parseCaptureLocally } from './capture'
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
@@ -286,6 +286,116 @@ function mapTransaction(raw: JsonObject, accountNames: Map<string, string> = new
   }
 }
 
+const METADATA_SOURCES = new Set([
+  'user_explicit', 'household_rule', 'safe_catalog', 'model_suggested', 'user_corrected'
+])
+const METADATA_EVIDENCE_FIELDS = new Set([
+  'amount', 'merchant', 'platform', 'category', 'subcategory', 'occurred_on'
+])
+
+function mapMetadataEvidence(raw: unknown): NonNullable<TransactionDraft['metadata']>['evidence'][string & keyof NonNullable<TransactionDraft['metadata']>['evidence']] | null {
+  if (
+    !isJsonObject(raw)
+    || !hasExactKeys(raw, ['source', 'confidence', 'review_status'], ['source', 'confidence', 'review_status'])
+    || typeof raw.source !== 'string'
+    || !METADATA_SOURCES.has(raw.source)
+    || typeof raw.confidence !== 'number'
+    || raw.confidence < 0
+    || raw.confidence > 1
+    || (raw.review_status !== 'needs_review' && raw.review_status !== 'reviewed')
+  ) return null
+  return {
+    source: raw.source as 'user_explicit',
+    confidence: raw.confidence,
+    reviewStatus: raw.review_status
+  }
+}
+
+function mapDraftMetadata(raw: JsonObject): Pick<TransactionDraft, 'platform' | 'subcategory' | 'categorySuggestion' | 'metadata' | 'tags'> {
+  const platform = raw.platform === null || raw.platform === undefined ? undefined : safeText(raw.platform, '', 100) || undefined
+  const subcategory = raw.subcategory === null || raw.subcategory === undefined ? undefined : safeText(raw.subcategory, '', 80) || undefined
+
+  let categorySuggestion: TransactionDraft['categorySuggestion']
+  if (raw.category_suggestion !== null && raw.category_suggestion !== undefined) {
+    const suggestion = raw.category_suggestion
+    if (
+      !isJsonObject(suggestion)
+      || !hasExactKeys(suggestion, ['source', 'confidence', 'reason'], ['source', 'confidence', 'reason'])
+      || typeof suggestion.source !== 'string'
+      || !METADATA_SOURCES.has(suggestion.source)
+      || typeof suggestion.confidence !== 'number'
+      || suggestion.confidence < 0
+      || suggestion.confidence > 1
+      || !isBoundedText(suggestion.reason, 160)
+    ) throw new Error('Capture metadata suggestion was invalid')
+    categorySuggestion = {
+      source: suggestion.source as 'safe_catalog',
+      confidence: suggestion.confidence,
+      reason: suggestion.reason
+    }
+  }
+
+  let metadata: TransactionDraft['metadata']
+  if (raw.metadata !== null && raw.metadata !== undefined) {
+    if (
+      !isJsonObject(raw.metadata)
+      || !hasExactKeys(raw.metadata, ['version', 'evidence', 'attributes'], ['version', 'evidence', 'attributes'])
+      || raw.metadata.version !== 1
+      || !isJsonObject(raw.metadata.evidence)
+      || !Array.isArray(raw.metadata.attributes)
+      || raw.metadata.attributes.length > 8
+    ) throw new Error('Capture metadata was invalid')
+    const evidence: NonNullable<TransactionDraft['metadata']>['evidence'] = {}
+    for (const [field, value] of Object.entries(raw.metadata.evidence)) {
+      if (!METADATA_EVIDENCE_FIELDS.has(field) || !isJsonObject(value)) {
+        throw new Error('Capture metadata evidence was invalid')
+      }
+      const mapped = mapMetadataEvidence({
+        source: value.source,
+        confidence: value.confidence,
+        review_status: value.review_status
+      })
+      if (!mapped) throw new Error('Capture metadata evidence was invalid')
+      evidence[field as keyof typeof evidence] = mapped
+    }
+    const attributes = raw.metadata.attributes.map((value) => {
+      if (
+        !isJsonObject(value)
+        || !hasExactKeys(value, ['key', 'value', 'source', 'confidence', 'review_status'], ['key', 'value', 'source', 'confidence', 'review_status'])
+        || (value.key !== 'meal_occasion' && value.key !== 'order_channel')
+        || !isBoundedText(value.value, 80)
+      ) throw new Error('Capture metadata attribute was invalid')
+      const mapped = mapMetadataEvidence({
+        source: value.source,
+        confidence: value.confidence,
+        review_status: value.review_status
+      })
+      if (!mapped) throw new Error('Capture metadata attribute was invalid')
+      return { key: value.key as 'meal_occasion' | 'order_channel', value: value.value, ...mapped }
+    })
+    metadata = { version: 1, evidence, attributes }
+  }
+
+  const rawTags = raw.tag_suggestions ?? []
+  if (!Array.isArray(rawTags) || rawTags.length > 8) throw new Error('Capture tags were invalid')
+  const tags = rawTags.map((value) => {
+    if (
+      !isJsonObject(value)
+      || !hasExactKeys(value, ['name', 'normalized_name', 'source', 'confidence', 'review_status'], ['name', 'normalized_name', 'source', 'confidence', 'review_status'])
+      || !isBoundedText(value.name, 60)
+      || !isBoundedText(value.normalized_name, 60)
+    ) throw new Error('Capture tag was invalid')
+    const mapped = mapMetadataEvidence({
+      source: value.source,
+      confidence: value.confidence,
+      review_status: value.review_status
+    })
+    if (!mapped) throw new Error('Capture tag was invalid')
+    return { name: value.name, normalizedName: value.normalized_name, selected: true, ...mapped }
+  })
+  return { platform, subcategory, categorySuggestion, metadata, tags }
+}
+
 function mapDraft(raw: JsonObject, text: string, memberNames: Map<string, string>, confidence?: unknown, warnings?: unknown): TransactionDraft {
   const amountPaise = numberValue(raw.amount_paise ?? raw.amountPaise)
   const apiKind = stringValue(raw.kind, 'expense')
@@ -306,12 +416,110 @@ function mapDraft(raw: JsonObject, text: string, memberNames: Map<string, string
     memberSplits: mapSplits(raw.splits, memberNames),
     confidence: warningList.length === 0 && (confidence === 'high' || (typeof confidence === 'number' && confidence >= 0.8)) ? 'high' : 'review',
     warnings: warningList,
-    sourceText: text
+    sourceText: text,
+    ...mapDraftMetadata(raw)
   }
+}
+
+const CAPTURE_MISSING_FIELDS = new Set([
+  'amount_paise', 'kind', 'description', 'source_account_id',
+  'destination_account_id', 'category_id', 'member_ids', 'occurred_on'
+])
+
+function mapCaptureClarification(raw: JsonObject): CaptureClarification | null {
+  if (
+    !hasExactKeys(
+      raw,
+      ['outcome', 'source_text', 'understood', 'missing_field', 'question', 'explanation', 'choices', 'warnings', 'parser_source'],
+      ['outcome', 'source_text', 'understood', 'missing_field', 'question', 'explanation', 'choices', 'warnings', 'parser_source']
+    )
+    || raw.outcome !== 'clarification'
+    || !isBoundedText(raw.source_text, 500)
+    || typeof raw.missing_field !== 'string'
+    || !CAPTURE_MISSING_FIELDS.has(raw.missing_field)
+    || !isBoundedText(raw.question, 240)
+    || !isBoundedText(raw.explanation, 240)
+    || !isBoundedText(raw.parser_source, 120)
+    || !isJsonObject(raw.understood)
+    || !Array.isArray(raw.choices)
+    || raw.choices.length > 20
+    || !Array.isArray(raw.warnings)
+    || raw.warnings.length > 5
+  ) return null
+
+  const understood = raw.understood
+  if (
+    !hasExactKeys(understood, ['amount_paise', 'kind', 'merchant', 'category', 'occurred_on'], [])
+    || (understood.amount_paise !== undefined && (!isSafePaise(understood.amount_paise) || understood.amount_paise <= 0))
+    || (understood.kind !== undefined && understood.kind !== 'expense' && understood.kind !== 'income' && understood.kind !== 'transfer')
+    || (understood.merchant !== undefined && !isBoundedText(understood.merchant, 160))
+    || (understood.category !== undefined && !isBoundedText(understood.category, 80))
+    || (understood.occurred_on !== undefined && (typeof understood.occurred_on !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(understood.occurred_on)))
+  ) return null
+
+  const choices = raw.choices.flatMap((value) => {
+    if (
+      !isJsonObject(value)
+      || !hasExactKeys(value, ['id', 'label', 'answer'], ['id', 'label', 'answer'])
+      || !isBoundedText(value.id, 80)
+      || !isBoundedText(value.label, 100)
+      || !isBoundedText(value.answer, 160)
+    ) return []
+    return [{ id: value.id, label: value.label, answer: value.answer }]
+  })
+  if (choices.length !== raw.choices.length) return null
+  const warnings = raw.warnings.flatMap((value) => isBoundedText(value, 160) ? [value] : [])
+  if (warnings.length !== raw.warnings.length) return null
+
+  return {
+    outcome: 'clarification',
+    sourceText: raw.source_text,
+    understood: {
+      amountPaise: understood.amount_paise as number | undefined,
+      kind: understood.kind as 'expense' | 'income' | 'transfer' | undefined,
+      merchant: understood.merchant as string | undefined,
+      category: understood.category as string | undefined,
+      occurredOn: understood.occurred_on as string | undefined
+    },
+    missingField: raw.missing_field as CaptureClarification['missingField'],
+    question: raw.question,
+    explanation: raw.explanation,
+    choices,
+    warnings,
+    parserSource: raw.parser_source
+  }
+}
+
+export function isCaptureClarification(result: CaptureResult): result is CaptureClarification {
+  return 'outcome' in result && result.outcome === 'clarification'
 }
 
 function toApiDraft(draft: TransactionDraft): JsonObject {
   const memberTotalPaise = draft.memberSplits.reduce((sum, split) => sum + split.amountPaise, 0)
+  const reviewedEvidence = draft.metadata
+    ? Object.entries(draft.metadata.evidence).filter(([field]) => (
+        (field !== 'platform' || Boolean(draft.platform?.trim()))
+        && (field !== 'subcategory' || Boolean(draft.subcategory?.trim()))
+      ))
+    : []
+  const reviewedMetadata = draft.metadata ? {
+    version: 1,
+    evidence: Object.fromEntries(reviewedEvidence.map(([field, evidence]) => [field, {
+      source: 'user_corrected',
+      confidence: evidence?.confidence,
+      review_status: 'reviewed'
+    }])),
+    attributes: draft.metadata.attributes.filter((attribute) => (
+      attribute.value.trim()
+      && (attribute.key !== 'order_channel' || Boolean(draft.platform?.trim()))
+    )).map((attribute) => ({
+      key: attribute.key,
+      value: attribute.value,
+      source: 'user_corrected',
+      confidence: attribute.confidence,
+      review_status: 'reviewed'
+    }))
+  } : undefined
   return {
     kind: draft.kind === 'transfer' ? 'transfer' : draft.kind === 'credit' ? 'income' : 'expense',
     amount_paise: draft.amountPaise,
@@ -323,7 +531,17 @@ function toApiDraft(draft: TransactionDraft): JsonObject {
     occurred_at: `${draft.occurredAt}T12:00:00Z`,
     notes: draft.note || null,
     source_account_id: draft.sourceAccountId,
-    destination_account_id: draft.destinationAccountId ?? null
+    destination_account_id: draft.destinationAccountId ?? null,
+    platform: draft.kind === 'debit' ? draft.platform ?? null : null,
+    subcategory: draft.kind === 'debit' ? draft.subcategory ?? null : null,
+    metadata: draft.kind === 'debit' ? reviewedMetadata ?? null : null,
+    tags: draft.kind === 'debit' ? (draft.tags ?? []).filter((tag) => tag.selected).map((tag) => ({
+      name: tag.name,
+      normalized_name: tag.normalizedName,
+      source: 'user_corrected',
+      confidence: tag.confidence,
+      review_status: 'reviewed'
+    })) : []
   }
 }
 
@@ -398,7 +616,8 @@ export async function getUserProfile(): Promise<UserProfile> {
   return {
     displayName: stringValue(raw.display_name, 'You'),
     householdName: stringValue(raw.household_name, 'My household'),
-    members: mapMembers(raw.members)
+    members: mapMembers(raw.members),
+    isDemo: raw.is_demo === true
   }
 }
 
@@ -576,6 +795,20 @@ export async function chatAssistant(message: string): Promise<AssistantReply> {
   }
 }
 
+export async function getAssistantStatus(): Promise<AssistantRuntimeStatus> {
+  const raw = await request<JsonObject>('/api/v1/assistant/status')
+  const dataPolicy = raw.data_policy === 'private_approved' ? 'private_approved' : 'sample_only'
+  return {
+    configured: raw.configured === true,
+    provider: stringValue(raw.provider, 'disabled'),
+    model: typeof raw.model === 'string' && raw.model ? safeText(raw.model, '', 120) : null,
+    available: raw.available === true,
+    dataPolicy,
+    personalDataEnabled: raw.personal_data_enabled === true,
+    isDemo: raw.is_demo === true
+  }
+}
+
 export async function getDashboard(): Promise<{ data: Dashboard; demo: boolean }> {
   try {
     const raw = await request<JsonObject>('/api/v1/dashboard')
@@ -632,7 +865,7 @@ export async function getTransactions(): Promise<{ data: Transaction[]; demo: bo
   }
 }
 
-export async function parseDraft(text: string, membersForFallback: HouseholdMember[] = []): Promise<{ data: TransactionDraft; demo: boolean }> {
+export async function parseDraft(text: string, membersForFallback: HouseholdMember[] = []): Promise<{ data: CaptureResult; demo: boolean }> {
   try {
     const [response, accounts, members] = await Promise.all([
       request<JsonObject>('/api/v1/drafts/parse', {
@@ -642,6 +875,11 @@ export async function parseDraft(text: string, membersForFallback: HouseholdMemb
       request<unknown>('/api/v1/accounts'),
       request<unknown>('/api/v1/members')
     ])
+    if (response.outcome === 'clarification') {
+      const clarification = mapCaptureClarification(response)
+      if (!clarification) throw new Error('Capture clarification was invalid')
+      return { data: clarification, demo: false }
+    }
     const rawDraft = (response.draft ?? response) as JsonObject
     const memberNames = memberNameMap(members)
     const draft = mapDraft(rawDraft, text, memberNames, response.confidence, response.warnings)

@@ -29,12 +29,13 @@ describe('QuickAddPage', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows the fictional-pilot Gemini disclosure before capture', () => {
+  it('shows an accurate AI-assisted disclosure before capture', () => {
     render(<RouterProvider><QuickAddPage onConfirm={vi.fn()} members={[]} /></RouterProvider>)
 
-    const notice = screen.getByRole('note', { name: /fictional-pilot AI notice/i })
-    expect(notice).toHaveTextContent(/submitted text.*Artha server.*configured Gemini/i)
-    expect(notice).toHaveTextContent(/do not enter real family-finance data/i)
+    const notice = screen.getByRole('note', { name: /AI-assisted capture/i })
+    expect(notice).toHaveTextContent(/configured AI provider.*reviewable result/i)
+    expect(notice).toHaveTextContent(/nothing is written to your ledger until you confirm/i)
+    expect(notice).not.toHaveTextContent(/fictional|pilot/i)
     expect(within(notice).getByRole('link', { name: /Settings/i })).toHaveAttribute('href', '/settings')
   })
 
@@ -59,6 +60,161 @@ describe('QuickAddPage', () => {
     await user.click(screen.getByRole('button', { name: /confirm and add transaction/i }))
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
     expect(await screen.findByText(/added to your artha/i)).toBeInTheDocument()
+  })
+
+  it('creates only an unsaved review draft when Enter is pressed', async () => {
+    const user = userEvent.setup()
+    const parseSpy = vi.spyOn(api, 'parseDraft')
+    const onConfirm = vi.fn()
+    render(<RouterProvider><QuickAddPage onConfirm={onConfirm} members={[]} /></RouterProvider>)
+
+    const composer = screen.getByLabelText(/your message/i)
+    await user.type(composer, 'Paid 540 at Zomato{enter}')
+
+    await waitFor(() => expect(parseSpy).toHaveBeenCalledWith('Paid 540 at Zomato', []))
+    expect(onConfirm).not.toHaveBeenCalled()
+    expect(screen.getByText(/Enter to continue/i)).toHaveTextContent(/Shift\+Enter for a new line/i)
+  })
+
+  it('keeps Shift+Enter as a newline and ignores composing Enter', async () => {
+    const user = userEvent.setup()
+    const parseSpy = vi.spyOn(api, 'parseDraft')
+    render(<RouterProvider><QuickAddPage onConfirm={vi.fn()} members={[]} /></RouterProvider>)
+
+    const composer = screen.getByLabelText(/your message/i)
+    await user.type(composer, 'Paid 540')
+    fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true })
+    expect(parseSpy).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(composer, { key: 'Enter', isComposing: true })
+    expect(parseSpy).not.toHaveBeenCalled()
+  })
+
+  it('explains a missing payment account and offers grounded choices', async () => {
+    const user = userEvent.setup()
+    const parseSpy = vi.spyOn(api, 'parseDraft')
+      .mockResolvedValueOnce({
+        demo: false,
+        data: {
+          outcome: 'clarification',
+          sourceText: 'Paid 540 at Zomato',
+          understood: { amountPaise: 54_000, kind: 'expense', merchant: 'Zomato' },
+          missingField: 'source_account_id',
+          question: 'How did you pay for Zomato?',
+          explanation: 'Choose one so Artha updates the correct balance. Nothing has been saved.',
+          choices: [
+            { id: 'demo-hdfc-upi', label: 'HDFC UPI', answer: 'paid from HDFC UPI' },
+            { id: 'demo-icici-bank', label: 'ICICI Bank', answer: 'paid from ICICI Bank' }
+          ],
+          warnings: [],
+          parserSource: 'gemini:test-model'
+        }
+      } as never)
+      .mockResolvedValueOnce({
+        demo: false,
+        data: {
+          kind: 'debit', amountPaise: 54_000, merchant: 'Zomato', category: 'Food & Dining',
+          account: 'HDFC UPI', sourceAccountId: 'demo-hdfc-upi', occurredAt: localDateOffset(0),
+          note: '', memberSplits: [], confidence: 'high',
+          sourceText: 'Paid 540 at Zomato; paid from HDFC UPI'
+        }
+      })
+    const onConfirm = vi.fn()
+    render(<RouterProvider><QuickAddPage onConfirm={onConfirm} members={[]} /></RouterProvider>)
+
+    await user.type(screen.getByLabelText(/your message/i), 'Paid 540 at Zomato')
+    await user.click(screen.getByRole('button', { name: /create review draft/i }))
+
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent('Zomato')
+    expect(status).toHaveTextContent('₹540')
+    expect(status).toHaveTextContent('How did you pay for Zomato?')
+    expect(status).toHaveTextContent(/correct balance.*nothing has been saved/i)
+    expect(screen.getByRole('button', { name: 'HDFC UPI' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ICICI Bank' })).toBeInTheDocument()
+    expect(onConfirm).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'HDFC UPI' }))
+
+    await waitFor(() => expect(parseSpy).toHaveBeenLastCalledWith(
+      'Paid 540 at Zomato; paid from HDFC UPI',
+      []
+    ))
+    expect(screen.getByLabelText(/your message/i)).toHaveValue('Paid 540 at Zomato; paid from HDFC UPI')
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('separates suggested category, transaction details, context and optional tags', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'parseDraft').mockResolvedValue({
+      demo: false,
+      data: {
+        kind: 'debit', amountPaise: 68_000, merchant: 'Burger King', category: 'Food & Dining',
+        account: 'HDFC UPI', sourceAccountId: 'demo-hdfc-upi', occurredAt: localDateOffset(0),
+        note: '', memberSplits: [], confidence: 'high',
+        sourceText: 'Paid 680 for dinner at Burger King via Zomato from HDFC UPI, date night',
+        platform: 'Zomato', subcategory: 'Fast Food',
+        categorySuggestion: {
+          source: 'safe_catalog', confidence: 1,
+          reason: "Burger King is in Artha's food merchant catalog."
+        },
+        metadata: {
+          version: 1,
+          evidence: {
+            merchant: { source: 'user_explicit', confidence: 0.99, reviewStatus: 'needs_review' },
+            platform: { source: 'user_explicit', confidence: 0.99, reviewStatus: 'needs_review' },
+            category: { source: 'safe_catalog', confidence: 1, reviewStatus: 'needs_review' }
+          },
+          attributes: [
+            { key: 'meal_occasion', value: 'Dinner', source: 'user_explicit', confidence: 0.99, reviewStatus: 'needs_review' },
+            { key: 'order_channel', value: 'Delivery', source: 'safe_catalog', confidence: 1, reviewStatus: 'needs_review' }
+          ]
+        },
+        tags: [
+          { name: 'Date Night', normalizedName: 'date night', source: 'user_explicit', confidence: 0.98, reviewStatus: 'needs_review', selected: true }
+        ]
+      }
+    } as never)
+    const onConfirm = vi.fn()
+    render(<RouterProvider><QuickAddPage onConfirm={onConfirm} members={[]} /></RouterProvider>)
+
+    await user.type(screen.getByLabelText(/your message/i), 'Paid 680 for dinner at Burger King via Zomato from HDFC UPI, date night')
+    await user.click(screen.getByRole('button', { name: /create review draft/i }))
+
+    expect(await screen.findByRole('heading', { name: 'Suggested category' })).toBeInTheDocument()
+    expect(screen.getByText("Burger King is in Artha's food merchant catalog.")).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Transaction details' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Merchant')).toHaveValue('Burger King')
+    expect(screen.getByLabelText('Platform')).toHaveValue('Zomato')
+    expect(screen.getByLabelText('Subcategory')).toHaveValue('Fast Food')
+    expect(screen.getByRole('heading', { name: 'Context' })).toBeInTheDocument()
+    expect(screen.getByText('Dinner')).toBeInTheDocument()
+    expect(screen.getByText('Delivery')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Optional tags' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Date Night' })).toBeChecked()
+    expect(onConfirm).not.toHaveBeenCalled()
+
+    await user.selectOptions(screen.getByLabelText('Category'), 'Other')
+    expect(screen.queryByRole('heading', { name: 'Suggested category' })).not.toBeInTheDocument()
+    expect(screen.queryByText("Burger King is in Artha's food merchant catalog.")).not.toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('Merchant'))
+    await user.type(screen.getByLabelText('Merchant'), 'Local Cafe')
+    expect(screen.getByLabelText('Category')).toHaveValue('Other')
+    expect(screen.getByLabelText('Subcategory')).toHaveValue('')
+
+    await user.clear(screen.getByLabelText('Platform'))
+    await user.type(screen.getByLabelText('Platform'), 'Direct')
+    expect(screen.queryByText('Delivery')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /confirm and add transaction/i }))
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
+    const submitted = onConfirm.mock.calls[0]?.[0] as TransactionDraft
+    expect(submitted.platform).toBe('Direct')
+    expect(submitted.metadata?.evidence.platform).toMatchObject({ source: 'user_corrected' })
+    expect(submitted.metadata?.attributes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'order_channel' })
+    ]))
+    expect(submitted.metadata?.evidence.category).toMatchObject({ source: 'user_corrected' })
   })
 
   it('offers a form-first entry with an explicit date picker', async () => {

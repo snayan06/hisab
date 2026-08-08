@@ -15,6 +15,12 @@ For the current ordered delivery view, blockers and user actions, see
 data until every remaining P0 security, recovery and privacy item below is
 complete.
 
+**Current candidate:** `codex/message-ux` adds password sign-in, server-verified
+demo-account separation, safe composer behavior, grounded capture continuation,
+reviewed structured metadata, honest progress messages, a manager-ready
+architecture pack and 60 capture evaluation cases. It remains unpublished until
+PR, CI, merge, deployment and final-domain acceptance complete.
+
 - [x] Public GitHub repository and CI/CodeQL workflows created under `snayan06/artha`.
 - [x] Obtain fresh green `main` CI run `31271421128` and CodeQL run
   `31271421107` for capture-hardening merge `c4ae0dc`.
@@ -72,13 +78,13 @@ without losing the submitted text.
 
 ### P1 — private-pilot improvements
 
-- [x] Add a versioned 50-case fictional capture/parser dataset and CI contract checker.
+- [x] Add a versioned 60-case sample capture/parser dataset and CI contract checker.
 - [x] Add deterministic and hosted-provider scoring runners with sanitized accuracy/error slices.
 - [ ] Add edit, correction and soft-delete controls to the UI for the existing API operations.
 - [ ] Show assistant evidence date range, source count and matching transactions.
 - [ ] Add representative assistant evaluation cases for totals, comparisons and affordability.
 - [x] Run capture, auto-tag and assistant hosted benchmarks before selecting the pilot model.
-- [x] Select Gemini 3.5 Flash-Lite for fictional pilot traffic and configure it server-side only.
+- [x] Select Gemini 3.5 Flash-Lite for sample-data evaluation and configure it server-side only.
 - [x] Remove deterministic production language parsing and fail into exact-text manual review without saving.
 - [x] Restrict assistant responses to approved intents and exact server-owned, database-grounded widget bundles.
 - [x] Merge AI-primary PR #20 as `69e44a8`; pass main CI, CodeQL and both web/API
@@ -92,6 +98,13 @@ without losing the submitted text.
   Income, Transfer and exact-text manual-recovery acceptance.
 - [ ] Exercise real provider-unavailable recovery on the final domain.
 - [ ] Add authenticated invitations, roles and removal for multiple logins in one household.
+- [x] Add safe Enter/Shift+Enter/IME composer behavior without keyboard confirmation.
+- [x] Add grounded one-question capture continuation with source-text preservation.
+- [x] Add reviewed merchant/platform/subcategory/context/optional-tag metadata
+  with rule/catalog/model precedence and atomic versioned JSON persistence.
+- [x] Add truthful Quick Add and Ask Artha progress messages without exposing
+  model chain-of-thought.
+- [ ] Publish and accept the message/metadata candidate on the final domain.
 
 ### Net-new gaps from the senior product audit
 
@@ -115,7 +128,7 @@ work. Full rationale and acceptance criteria:
 - [x] Give Quick Add account-context loading an accessible error, retry action
   and explicit disabled-confirm reason without losing the draft.
 - [ ] Approve a privacy configuration for real family-finance text; the current
-  implementation and disclosure authorize fictional pilot data only.
+  implementation and disclosure authorize sample data only.
 - [ ] Remove stale active-QA claims of deterministic production capture or
   assistant fallback; keep provider benchmarks historical.
 
@@ -133,13 +146,18 @@ work. Full rationale and acceptance criteria:
 
 - [ ] Add an optional missing-transaction reminder and weekly ledger review.
 
-### P2 — expansion after the private pilot
+### P2 — expansion after production acceptance
 
 - [ ] Either align the optional local demo parser with the production capture
   examples (`25k`, transfers and custom accounts) or replace it with a clearly
   manual-only offline demo contract.
 - [ ] Add optional WhatsApp or Telegram capture.
-- [ ] Add investments, liabilities and net-worth tracking.
+- [ ] Add a future **Investments** tab, starting with mutual funds and stocks;
+  approve the detailed tracking, valuation and import scope during sprint planning.
+- [ ] Plan the future bounded agentic evolution of Ask Artha in a dedicated
+  sprint; do not add a multi-step agent runtime to the current messaging release.
+- [ ] Normalize reusable household tags and aliases in relational tables, then
+  add merchant/platform/category analytics through canonical assistant bundles.
 
 ### Definition of done for every task
 
@@ -254,6 +272,13 @@ work. Full rationale and acceptance criteria:
 - [x] Return validated metric, chart and transaction-table schemas.
 - [ ] Show evidence date range, source count and matching transactions.
 - [ ] Add evaluation cases for totals, comparisons and affordability questions.
+- [ ] Hold a dedicated sprint-planning session for agentic Ask Artha: define its
+  read-only tool catalogue, deterministic evidence contract, generative UI,
+  authority limits, privacy/audit model, cost/latency budgets and evaluations.
 - [x] Build versioned fictional capture, auto-tag and assistant benchmarks and select Gemini for the pilot from measured results.
 - [ ] Add optional Telegram/WhatsApp capture adapter.
-- [ ] Add investments, liabilities and net-worth model.
+- [ ] Add a top-level **Investments** tab for mutual funds and stocks first;
+  track holdings, invested/current value, gain/loss, allocation and valuation
+  timestamps before expanding to liabilities and broader net worth.
+- [ ] Keep investment V1 tracking-only: no trading, investment advice, tax
+  calculation or autonomous transactions.

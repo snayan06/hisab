@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .ai_policy import AiAccessPolicy
 from .assistant import (
     AssistantChatRequest,
     AssistantChatResponse,
@@ -31,18 +32,29 @@ from .assistant import (
     TagSuggestionRequest,
     TagSuggestionResponse,
 )
-from .auth import AuthDependency
+from .auth import AuthContext, AuthDependency
 from .recovery import RecoveryBundle
 from .schemas import (
     AccountCreate,
+    CaptureChoiceResponse,
+    CaptureClarificationResponse,
     CaptureContextAccount,
     CaptureContextCategory,
     CaptureContextResponse,
+    CaptureUnderstoodResponse,
     MemberCreate,
     ParseRequest,
     normalize_required_description,
 )
 from .supabase_rest import SupabaseRestClient, rest_client_for_request
+from .transaction_metadata import (
+    SAFE_TAG_PHRASES,
+    ReviewedMetadata,
+    SuggestedTag,
+    normalize_key,
+    normalize_label,
+    suggest_transaction_metadata,
+)
 
 router = APIRouter()
 
@@ -55,6 +67,116 @@ async def production_client(
 
 
 ClientDependency = Annotated[SupabaseRestClient, Depends(production_client)]
+
+
+CAPTURE_MISSING_PRIORITY = (
+    "amount_paise",
+    "kind",
+    "description",
+    "source_account_id",
+    "destination_account_id",
+    "category_id",
+    "member_ids",
+    "occurred_on",
+)
+
+
+def capture_clarification_response(
+    result: CaptureClarification,
+    *,
+    source_text: str,
+    accounts: list[dict[str, Any]],
+    parser_source: str,
+) -> dict[str, Any]:
+    missing_field = next(
+        field for field in CAPTURE_MISSING_PRIORITY if field in result.missing
+    )
+    merchant = result.description
+    choices: list[CaptureChoiceResponse] = []
+    if missing_field in {"source_account_id", "destination_account_id"}:
+        for account in accounts:
+            account_id = str(account["id"])
+            if (
+                missing_field == "destination_account_id"
+                and result.source_account_id == account_id
+            ):
+                continue
+            label = safe_label(account["name"], "Account")
+            if missing_field == "destination_account_id":
+                answer = f"transferred to {label}"
+            elif result.kind == "income":
+                answer = f"received in {label}"
+            elif result.kind == "transfer":
+                answer = f"transferred from {label}"
+            else:
+                answer = f"paid from {label}"
+            choices.append(CaptureChoiceResponse(id=account_id, label=label, answer=answer))
+
+    if missing_field == "source_account_id":
+        if result.kind == "income":
+            question = "Which account received this money?"
+        elif result.kind == "transfer":
+            question = "Which account did the money move from?"
+        else:
+            question = f"How did you pay for {merchant}?" if merchant else "How did you pay?"
+        explanation = (
+            "Choose one so Artha updates the correct balance. Nothing has been saved."
+        )
+    elif missing_field == "destination_account_id":
+        question = "Which account did the money move to?"
+        explanation = (
+            "Choose the receiving account so both balances stay correct. "
+            "Nothing has been saved."
+        )
+    elif missing_field == "amount_paise":
+        question = "How much was this transaction?"
+        explanation = "Add the amount to continue. Nothing has been saved."
+    elif missing_field == "kind":
+        question = "Was this money spent, received, or transferred?"
+        explanation = (
+            "Open the form below and choose the movement type. Nothing has been saved."
+        )
+    elif missing_field == "description":
+        question = "What was this transaction for?"
+        explanation = "Add a short description to continue. Nothing has been saved."
+    elif missing_field == "occurred_on":
+        question = "When did this happen?"
+        explanation = "Open the form below and enter the date. Nothing has been saved."
+    elif missing_field == "category_id":
+        question = "Which category fits this transaction?"
+        explanation = "Open the form below and choose a category. Nothing has been saved."
+    else:
+        question = "Who was this shared with?"
+        explanation = "Open the form below and select the people involved. Nothing has been saved."
+
+    response = CaptureClarificationResponse(
+        source_text=source_text,
+        understood=CaptureUnderstoodResponse(
+            amount_paise=result.amount_paise,
+            kind=result.kind,
+            merchant=merchant,
+            category=result.category_name,
+            occurred_on=result.occurred_on,
+        ),
+        missing_field=cast(Any, missing_field),
+        question=question,
+        explanation=explanation,
+        choices=choices,
+        warnings=result.warnings,
+        parser_source=parser_source,
+    )
+    return response.model_dump(mode="json", exclude_none=True)
+
+
+def require_ai_access(auth: AuthContext) -> AiAccessPolicy:
+    policy = AiAccessPolicy.from_env()
+    if not policy.can_send_financial_text(auth.user_id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "AI features are not enabled for personal financial data in this "
+            "deployment; use manual entry.",
+        )
+    return policy
 
 
 class ProductionOnboardingRequest(BaseModel):
@@ -97,11 +219,25 @@ class ProductionDraft(BaseModel):
     destination_account_id: UUID | None = None
     occurred_at: datetime | None = None
     notes: str | None = Field(default=None, max_length=1000)
+    platform: str | None = Field(default=None, min_length=1, max_length=100)
+    subcategory: str | None = Field(default=None, min_length=1, max_length=80)
+    metadata: ReviewedMetadata | None = None
+    tags: list[SuggestedTag] = Field(default_factory=list, max_length=8)
 
     @field_validator("description")
     @classmethod
     def normalize_description(cls, description: str) -> str:
         return normalize_required_description(description)
+
+    @field_validator("platform", "subcategory")
+    @classmethod
+    def normalize_optional_metadata_label(cls, value: str | None, info: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = normalize_label(value)
+        if not normalized:
+            raise ValueError(f"{info.field_name} cannot be blank")
+        return normalized
 
     @model_validator(mode="after")
     def split_total_matches(self) -> ProductionDraft:
@@ -118,10 +254,60 @@ class ProductionDraft(BaseModel):
                 raise ValueError("transfer accounts must be different")
             if self.splits or self.paid_by_member_id is not None:
                 raise ValueError("transfer cannot contain household splits")
+            if self.platform or self.subcategory or self.metadata or self.tags:
+                raise ValueError("transfer cannot contain metadata or tags")
         elif self.destination_account_id is not None:
             raise ValueError("destination account is only valid for a transfer")
+        if self.kind == "income" and (
+            self.platform or self.subcategory or self.metadata or self.tags
+        ):
+            raise ValueError("income cannot contain expense metadata or tags")
         if self.kind != "transfer" and self.category is None:
             raise ValueError("expense and income require a category")
+        if self.metadata is None and (self.platform or self.subcategory or self.tags):
+            raise ValueError("structured fields require metadata")
+        review_statuses = [
+            *(item.review_status for item in (self.metadata.attributes if self.metadata else [])),
+            *(
+                item.review_status
+                for item in (self.metadata.evidence.values() if self.metadata else [])
+            ),
+            *(item.review_status for item in self.tags),
+        ]
+        if any(review_status != "reviewed" for review_status in review_statuses):
+            raise ValueError("metadata must be reviewed before confirmation")
+        provenance_sources = [
+            *(item.source for item in (self.metadata.evidence.values() if self.metadata else [])),
+            *(item.source for item in (self.metadata.attributes if self.metadata else [])),
+            *(item.source for item in self.tags),
+        ]
+        if any(source != "user_corrected" for source in provenance_sources):
+            raise ValueError(
+                "reviewed metadata provenance must be user-corrected at confirmation"
+            )
+        if self.metadata is not None:
+            if "platform" in self.metadata.evidence and self.platform is None:
+                raise ValueError("platform evidence requires a platform")
+            if "subcategory" in self.metadata.evidence and self.subcategory is None:
+                raise ValueError("subcategory evidence requires a subcategory")
+        tag_names = [tag.normalized_name for tag in self.tags]
+        if len(tag_names) != len(set(tag_names)):
+            raise ValueError("transaction tags must be unique")
+        allowed_tag_names = {normalize_key(name) for name in SAFE_TAG_PHRASES}
+        if any(tag.normalized_name not in allowed_tag_names for tag in self.tags):
+            raise ValueError("transaction tag is not in the server allow-list")
+        reserved = {
+            normalize_key(value)
+            for value in (
+                self.description,
+                self.category or "",
+                self.platform or "",
+                self.subcategory or "",
+            )
+            if value
+        }
+        if any(tag.normalized_name in reserved for tag in self.tags):
+            raise ValueError("tag duplicates a transaction field")
         return self
 
 
@@ -288,6 +474,7 @@ async def profile(
     return {
         "display_name": owner["display_name"],
         "household_name": households[0]["name"],
+        "is_demo": AiAccessPolicy.from_env().is_demo(auth.user_id),
         "members": [
             public_member(member)
             for member in members
@@ -347,6 +534,25 @@ async def categories_by_id(
         },
     )
     return {str(row["id"]): row for row in rows}
+
+
+async def merchant_rule_rows(
+    client: SupabaseRestClient, household_id: str
+) -> list[dict[str, Any]]:
+    rows = await client.request(
+        "GET",
+        "merchant_rules",
+        params={
+            "household_id": f"eq.{household_id}",
+            "is_active": "eq.true",
+            "select": (
+                "id,match_type,merchant_pattern,category_id,account_id,"
+                "priority,is_active"
+            ),
+            "order": "priority.desc,id.asc",
+        },
+    )
+    return list(rows or [])
 
 
 def normalize_category_name(value: str) -> str:
@@ -560,7 +766,25 @@ async def confirm_transaction(
             "p_idempotency_key": idempotency_key,
             "p_merchant": payload.description,
             "p_note": payload.notes,
-            "p_metadata": {"source": "artha-api"},
+            "p_metadata": {
+                "source": "artha-api",
+                **(
+                    {
+                        "version": 1,
+                        "platform": payload.platform,
+                        "subcategory": payload.subcategory,
+                        "evidence": payload.metadata.model_dump(mode="json")[
+                            "evidence"
+                        ],
+                        "attributes": payload.metadata.model_dump(mode="json")[
+                            "attributes"
+                        ],
+                        "tags": [tag.model_dump(mode="json") for tag in payload.tags],
+                    }
+                    if payload.metadata is not None
+                    else {}
+                ),
+            },
         },
     )
     result["transaction_splits"] = splits
@@ -730,6 +954,7 @@ async def parse_draft(
     client: ClientDependency,
     auth: AuthDependency,
 ) -> dict[str, Any]:
+    require_ai_access(auth)
     household_id = await current_household(client)
     assert household_id is not None
     accounts = await account_rows(client, household_id)
@@ -784,7 +1009,12 @@ async def parse_draft(
         )
     result = interpreted.result
     if isinstance(result, CaptureClarification):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, result.question)
+        return capture_clarification_response(
+            result,
+            source_text=payload.text,
+            accounts=accounts,
+            parser_source=f"{interpreted.provider}:{interpreted.model}",
+        )
     if isinstance(result, CaptureRejection):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, result.reason)
     assert isinstance(result, CaptureDraftInterpretation)
@@ -818,13 +1048,95 @@ async def parse_draft(
         personal_share = result.amount_paise
         splits = []
     account_names = {str(account["id"]): str(account["name"]) for account in accounts}
+    category_name = result.category_name
+    platform: str | None = None
+    subcategory: str | None = None
+    category_suggestion: dict[str, Any] | None = None
+    metadata: dict[str, Any] = {"version": 1, "evidence": {}, "attributes": []}
+    tag_suggestions: list[dict[str, Any]] = []
+    if result.kind == "expense":
+        suggestion = suggest_transaction_metadata(
+            source_text=payload.text,
+            merchant=result.description,
+            platform=result.platform,
+            model_category_id=result.category_id,
+            model_category_name=result.category_name,
+            model_subcategory=result.subcategory,
+            model_attributes=result.attributes,
+            model_tags=result.tags,
+            categories=categories,
+            merchant_rules=await merchant_rule_rows(client, household_id),
+        )
+        category_name = suggestion.category_name
+        platform = suggestion.platform
+        subcategory = suggestion.subcategory
+        evidence_by_field = {
+            evidence.field: {
+                "source": evidence.source,
+                "confidence": evidence.confidence,
+                "review_status": "needs_review",
+            }
+            for evidence in result.field_evidence
+        }
+        metadata["evidence"] = {
+            "merchant": evidence_by_field.get(
+                "merchant",
+                {
+                    "source": "model_suggested",
+                    "confidence": result.confidence,
+                    "review_status": "needs_review",
+                },
+            ),
+        }
+        if platform:
+            metadata["evidence"]["platform"] = evidence_by_field.get(
+                "platform",
+                {
+                    "source": "model_suggested",
+                    "confidence": result.confidence,
+                    "review_status": "needs_review",
+                },
+            )
+        if suggestion.category_source is not None:
+            category_evidence = {
+                "source": suggestion.category_source,
+                "confidence": suggestion.category_confidence,
+                "review_status": "needs_review",
+            }
+            metadata["evidence"]["category"] = category_evidence
+            category_suggestion = {
+                "source": suggestion.category_source,
+                "confidence": suggestion.category_confidence,
+                "reason": suggestion.category_reason,
+            }
+        if subcategory:
+            metadata["evidence"]["subcategory"] = evidence_by_field.get(
+                "subcategory",
+                {
+                    "source": "safe_catalog",
+                    "confidence": 1.0,
+                    "review_status": "needs_review",
+                },
+            )
+        metadata["attributes"] = [
+            attribute.model_dump(mode="json") for attribute in suggestion.attributes
+        ]
+        tag_suggestions = [
+            tag.model_dump(mode="json") for tag in suggestion.tags
+        ]
     return {
+        "outcome": "draft",
         "draft": {
             "kind": result.kind,
             "amount_paise": result.amount_paise,
             "description": result.description,
-            "category": result.category_name
+            "category": category_name
             or ("Transfer" if result.kind == "transfer" else "Other"),
+            "subcategory": subcategory,
+            "platform": platform,
+            "category_suggestion": category_suggestion,
+            "metadata": metadata,
+            "tag_suggestions": tag_suggestions,
             "paid_by_member_id": None,
             "personal_share_paise": personal_share,
             "splits": splits,
@@ -847,8 +1159,16 @@ def safe_label(value: Any, fallback: str = "Uncategorized") -> str:
 
 
 @router.get("/api/v1/assistant/status", response_model=AssistantStatus, tags=["assistant"])
-async def assistant_status(_auth: AuthDependency) -> AssistantStatus:
-    return await LocalFinancialAssistant().status()
+async def assistant_status(auth: AuthDependency) -> AssistantStatus:
+    status_response = await LocalFinancialAssistant().status()
+    policy = AiAccessPolicy.from_env()
+    return status_response.model_copy(
+        update={
+            "data_policy": policy.data_policy.value,
+            "personal_data_enabled": policy.data_policy.value == "private_approved",
+            "is_demo": policy.is_demo(auth.user_id),
+        }
+    )
 
 
 @router.post(
@@ -861,6 +1181,7 @@ async def assistant_chat(
     client: ClientDependency,
     auth: AuthDependency,
 ) -> AssistantChatResponse:
+    require_ai_access(auth)
     summary = await dashboard(client, auth)
     context = AssistantFinancialContext(
         total_balance_paise=int(summary["total_balance_paise"]),
@@ -918,8 +1239,9 @@ async def assistant_chat(
 async def assistant_tag_suggestion(
     payload: ProductionTagSuggestionRequest,
     client: ClientDependency,
-    _auth: AuthDependency,
+    auth: AuthDependency,
 ) -> TagSuggestionResponse:
+    require_ai_access(auth)
     household_id = await current_household(client)
     assert household_id is not None
     category_types = {payload.direction, "both"}

@@ -185,6 +185,41 @@ class ParseRequest(ApiModel):
     timezone: str = Field(default="Asia/Kolkata", min_length=1, max_length=64)
 
 
+class CaptureChoiceResponse(ApiModel):
+    id: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=100)
+    answer: str = Field(min_length=1, max_length=160)
+
+
+class CaptureUnderstoodResponse(ApiModel):
+    amount_paise: int | None = Field(default=None, gt=0)
+    kind: Literal["expense", "income", "transfer"] | None = None
+    merchant: str | None = Field(default=None, min_length=1, max_length=160)
+    category: str | None = Field(default=None, min_length=1, max_length=80)
+    occurred_on: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class CaptureClarificationResponse(ApiModel):
+    outcome: Literal["clarification"] = "clarification"
+    source_text: str = Field(min_length=1, max_length=500)
+    understood: CaptureUnderstoodResponse
+    missing_field: Literal[
+        "amount_paise",
+        "kind",
+        "description",
+        "source_account_id",
+        "destination_account_id",
+        "category_id",
+        "member_ids",
+        "occurred_on",
+    ]
+    question: str = Field(min_length=1, max_length=240)
+    explanation: str = Field(min_length=1, max_length=240)
+    choices: list[CaptureChoiceResponse] = Field(default_factory=list, max_length=20)
+    warnings: list[str] = Field(default_factory=list, max_length=5)
+    parser_source: str = Field(min_length=1, max_length=120)
+
+
 class TransactionSplitInput(ApiModel):
     member_id: int = Field(gt=0)
     amount_paise: int = Field(gt=0)

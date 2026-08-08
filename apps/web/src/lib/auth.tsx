@@ -18,6 +18,7 @@ interface AuthContextValue {
   error: string | null
   recovery: AuthRecovery | null
   signInWithMagicLink: (email: string) => Promise<void>
+  signInWithPassword: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   refreshSession: () => Promise<void>
 }
@@ -29,6 +30,7 @@ const demoAuth: AuthContextValue = {
   error: null,
   recovery: null,
   signInWithMagicLink: async () => undefined,
+  signInWithPassword: async () => undefined,
   signOut: async () => undefined,
   refreshSession: async () => undefined
 }
@@ -202,6 +204,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         options: { emailRedirectTo: window.location.origin }
       })
       if (signInError) throw new Error('The sign-in link could not be sent. Please try again.')
+      setRecovery(null)
+    },
+    signInWithPassword: async (email: string, password: string) => {
+      const client = getSupabaseClient()
+      if (!client) throw new Error('Supabase authentication is not configured.')
+      const { error: signInError } = await client.auth.signInWithPassword({
+        email: email.trim(),
+        password
+      })
+      if (signInError) throw new Error('Email or password did not match. Please try again.')
       setRecovery(null)
     },
     signOut: async () => {

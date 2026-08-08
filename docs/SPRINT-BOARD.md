@@ -3,8 +3,8 @@
 Start with [`PROJECT-CHECKPOINT.md`](PROJECT-CHECKPOINT.md) for the current
 handoff, release guard and exact resume sequence.
 
-Updated: 8 August 2026
-Goal: make the private pilot trustworthy before entering real financial data
+Updated: 9 August 2026
+Goal: make personal production use trustworthy before entering real financial data
 
 Current scope: a private personal ledger with expense splitting for friends and
 family. Separate logins for invited people are optional future work, not a
@@ -23,6 +23,7 @@ Sprint 1 dependency.
 | --- | --- | --- |
 | AI-primary release | Deployed | PR #20 merged as `69e44a8`; production capture and assistant are model-only, and both web/API Vercel deployments are ready |
 | V1 capture hardening | Deployed and accepted | PR #21 merged as `c4ae0dc`; manual Expense/Income/Transfer recovery, grounded category/account context and the AI notice passed final-domain fictional QA plus 170 web + 223 API + 50/30/24 AI contracts |
+| Message UX and metadata | Local release candidate | Safe composer behavior, grounded continuation, reviewed merchant/platform/category/context/tags, progress messages, editable architecture pack and 60 capture cases are implemented; PR/CI/deployment/final-domain QA remain |
 | Public repository and CI | Done for current release | Main CI `31271421128` and CodeQL `31271421107` passed for `c4ae0dc` |
 | Vercel and Supabase infrastructure | Done | Web, API and database are live on personal accounts |
 | Persistent production login | Done for one fictional identity | New-user link, returning-user link, persisted session and sign-out/re-login passed on the final domain |
@@ -30,7 +31,7 @@ Sprint 1 dependency.
 | ₹25k self-transfer flow | Production verified | `25k` mapped to ₹25,000 with ordered ICICI → HDFC accounts; totals remained unchanged |
 | First-request reliability | Deployed | API now runs Mumbai → Mumbai; authenticated cold/warm measurement remains |
 | Structured Gemini features | Production verified | Grounded capture and read-only metric/chart responses passed; hosted fictional gates remain 50/50, 30/30 and 24/24 |
-| Parser evaluation dataset | Done | 50 fictional cases plus an automated contract checker are in the repository |
+| Parser evaluation dataset | Done | 60 fictional cases, including merchant/platform/context/tag scenarios, plus an automated contract checker are in the repository |
 | Private AI learning/eval ledger | Priority next | Audited private interactions, user corrections, token budgets and eval runs need RLS-backed storage, export/delete controls and sanitized dataset promotion |
 | Accounts & family | Next implementation track | Product contract and secure architecture are complete; owner maintenance ships before invitations |
 | Family email invitations | Sprint 2B | Permission model is defined; owner-only RLS hardening must land before any invited viewer |
@@ -213,9 +214,9 @@ See [`artifacts/qa/2026-08-06-web-interface-guidelines-audit.md`](artifacts/qa/2
 
 ### Measured AI
 
-- [x] Add deterministic and hosted-model scoring runners for the 50-case dataset.
+- [x] Add deterministic and hosted-model scoring runners for the 60-case dataset.
 - [ ] Publish separate amount/date/account/transfer/split/Hinglish error slices.
-- [x] Select hosted Gemini for fictional pilot traffic after all critical-field gates pass.
+- [x] Select hosted Gemini for sample-data traffic after all critical-field gates pass.
 - [ ] Show assistant evidence range, source count and matching transactions.
 - [ ] Prove assistant totals equal deterministic database calculations.
 
@@ -230,11 +231,47 @@ See [`artifacts/qa/2026-08-06-web-interface-guidelines-audit.md`](artifacts/qa/2
 
 ### Investments and liabilities (independent release gate)
 
+- [ ] Add a top-level **Investments** tab; detailed product, valuation and data-source scope must be approved during sprint planning before implementation.
+- [ ] Start the first tracking slice with mutual funds and stocks only.
+- [ ] Show invested amount, current value, absolute gain/loss, allocation and the timestamp/source of every valuation.
 - [ ] Model investment accounts, instruments, holdings/lots, liabilities and dated prices.
 - [ ] Start with manual entry and CSV import; defer bank/broker aggregation.
 - [ ] Keep portfolio transfers separate from spending and show valuation timestamps.
 - [ ] Reconcile holdings from transactions and prevent net-worth double counting.
 - [ ] Defer trading, advice, tax calculations and automatic corporate actions.
+
+## Next data sprint — metadata analytics and reusable tags
+
+- [ ] Add household-managed tags, aliases, lifecycle controls and relational
+  transaction links with RLS and recovery versioning.
+- [ ] Add merchant/platform/category personal-share aggregates that exclude
+  transfers and card payments.
+- [ ] Add canonical, database-calculated Ask Artha breakdown bundles; Gemini may
+  select a bundle but never calculate its values.
+- [ ] Add edit/correction behavior for reviewed metadata without rewriting
+  unrelated history.
+
+## Future sprint candidate — agentic Ask Artha
+
+This is intentionally parked. Its exact scope, sequencing, model/tool choice,
+cost budget and acceptance gates must be decided in a dedicated sprint-planning
+session before implementation.
+
+- [ ] Evolve Ask Artha beyond its current fixed-intent assistant into a bounded
+  multi-step financial-analysis agent.
+- [ ] Define server-owned read-only tools for transaction search, period and
+  category comparison, account analysis, recurring-spend detection, anomaly
+  review and evidence retrieval.
+- [ ] Require every number and conclusion to link back to deterministic ledger
+  calculations and matching transactions; model reasoning is never ledger truth.
+- [ ] Show a user-friendly activity/evidence trail and generative UI without
+  exposing raw private chain-of-thought or rendering model-authored HTML.
+- [ ] Keep read-only analysis automatic; any create/edit/delete capability may
+  only prepare a reviewable draft and requires explicit user confirmation.
+- [ ] Define tool-step, latency, token/cost, privacy, audit, failure and evaluation
+  budgets before enabling an agent loop in production.
+- [ ] Keep payments, transfers of real money, trading and autonomous financial
+  actions outside Artha's authority.
 
 ## Release blockers before real financial data
 

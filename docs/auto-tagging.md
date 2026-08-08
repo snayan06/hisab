@@ -6,11 +6,11 @@ without confirmation.
 ## Current production behavior
 
 Supabase production Quick Add sends the authenticated capture context directly
-to Gemini, including the household's existing category allow-list. It does not
-currently load or apply `merchant_rules` before interpretation. Gemini's
-allow-listed category selection is surfaced inside the unsaved Quick Add review
-draft. If interpretation is unavailable or invalid, category selection remains
-manual.
+to Gemini, including the household's existing category allow-list. FastAPI then
+resolves suggestions in this order: an active household merchant rule, the small
+server-owned safe catalog, a grounded model suggestion, or no suggestion. The
+source and reason are surfaced inside the unsaved Quick Add review. If
+interpretation is unavailable or invalid, category selection remains manual.
 
 The standalone `POST /api/v1/assistant/tag-suggestion` endpoint is a bounded
 Gemini API contract. The caller sends only description, amount and direction;
@@ -24,17 +24,18 @@ category.
 
 Only explicit transaction confirmation can save the reviewed draft.
 
-## Local/demo rule behavior
+## Merchant-rule behavior
 
-The SQLAlchemy local/demo path implements merchant-rule-first behavior. It
+Both production capture and the SQLAlchemy local/demo path implement
+merchant-rule-first behavior. They
 normalizes merchant text, matches household rules by `exact`, `contains`, then
 validated `regex`, and asks the configured model only when no rule matches. A
 confirmed correction can prospectively create or update a rule for later local
 entries.
 
-Production Supabase integration for matching and learning these rules is
-planned. Until it ships, rule-first categorization must not be presented as a
-production capability.
+Production reads only active rules belonging to the authenticated household.
+Learning remains prospective: a new rule affects later drafts and never rewrites
+history.
 
 ## Production API contract
 
@@ -77,7 +78,7 @@ preview and confirmation workflow.
 
 ## Provider behavior
 
-The production private pilot uses `gemini-3.5-flash-lite` through Google's
+Production uses `gemini-3.5-flash-lite` through Google's
 official SDK. For the standalone endpoint, server code supplies the authenticated
 household category allow-list to Gemini. When Gemini is missing, rate-limited,
 unavailable or invalid, no category is selected. Explicit Ollama selection may

@@ -1,7 +1,12 @@
 # Excalidraw architecture board design
 
 **Date:** 2026-08-08
-**Status:** implemented
+**Status:** superseded on 9 August 2026 by the
+[manager-ready architecture set](2026-08-09-manager-ready-architecture-set-design.md)
+
+This document records the earlier exploratory whiteboard direction. Its raw,
+scattered-note treatment was replaced after review with a cleaner product
+overview and five focused component boards. It remains as design history only.
 
 ## Objective
 

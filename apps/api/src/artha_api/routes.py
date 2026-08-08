@@ -910,7 +910,7 @@ async def bootstrap_demo(
             await create_transaction(
                 session,
                 TransactionDraft(
-                    kind="income",
+                    kind=TransactionKind.INCOME,
                     amount_paise=350_000,
                     personal_share_paise=350_000,
                     description="Freelance payment",
@@ -922,7 +922,7 @@ async def bootstrap_demo(
             await create_transaction(
                 session,
                 TransactionDraft(
-                    kind="expense",
+                    kind=TransactionKind.EXPENSE,
                     amount_paise=184_000,
                     personal_share_paise=92_000,
                     splits=[

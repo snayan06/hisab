@@ -76,7 +76,15 @@ describe('FastAPI adapter', () => {
         draft: {
           kind: 'expense', amount_paise: 184000, description: 'Groceries', category: 'Groceries',
           paid_by_member_id: null, personal_share_paise: 92000, splits: [{ member_id: 7, amount_paise: 92000 }],
-          source_account_id: 42, occurred_at: '2026-08-04T12:00:00Z'
+          source_account_id: 42, occurred_at: '2026-08-04T12:00:00Z', platform: 'Zomato',
+          subcategory: 'Delivery',
+          category_suggestion: { source: 'safe_catalog', confidence: 1, reason: 'Known platform.' },
+          metadata: {
+            version: 1,
+            evidence: { platform: { source: 'safe_catalog', confidence: 1, review_status: 'needs_review' } },
+            attributes: [{ key: 'order_channel', value: 'Delivery', source: 'safe_catalog', confidence: 1, review_status: 'needs_review' }]
+          },
+          tag_suggestions: [{ name: 'Work Meal', normalized_name: 'work meal', source: 'user_explicit', confidence: 0.95, review_status: 'needs_review' }]
         }, confidence: 0.97, warnings: []
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
       .mockResolvedValueOnce(new Response(JSON.stringify([
@@ -91,15 +99,39 @@ describe('FastAPI adapter', () => {
         source_account_id: 42, occurred_at: '2026-08-04T12:00:00Z'
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
-    const { confirmDraft, parseDraft } = await import('./api')
+    const { confirmDraft, isCaptureClarification, parseDraft } = await import('./api')
 
     const parsed = await parseDraft('Paid 1840 for groceries from HDFC UPI, split equally with Sam')
+    if (isCaptureClarification(parsed.data)) throw new Error('expected a review draft')
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual(expect.objectContaining({ timezone: expect.any(String) }))
     expect(parsed.data.sourceAccountId).toBe(42)
+    expect(parsed.data).toMatchObject({
+      platform: 'Zomato',
+      subcategory: 'Delivery',
+      categorySuggestion: { source: 'safe_catalog', confidence: 1, reason: 'Known platform.' },
+      metadata: {
+        version: 1,
+        evidence: { platform: { source: 'safe_catalog', confidence: 1, reviewStatus: 'needs_review' } },
+        attributes: [{ key: 'order_channel', value: 'Delivery', source: 'safe_catalog', confidence: 1, reviewStatus: 'needs_review' }]
+      },
+      tags: [{ name: 'Work Meal', normalizedName: 'work meal', selected: true }]
+    })
     const confirmed = await confirmDraft(parsed.data)
 
     const confirmInit = fetchMock.mock.calls[3]?.[1] as RequestInit
-    expect(JSON.parse(String(confirmInit.body))).toMatchObject({ source_account_id: 42, paid_by_member_id: null, splits: [{ member_id: 7, amount_paise: 92000 }] })
+    expect(JSON.parse(String(confirmInit.body))).toMatchObject({
+      source_account_id: 42,
+      paid_by_member_id: null,
+      platform: 'Zomato',
+      subcategory: 'Delivery',
+      metadata: {
+        version: 1,
+        evidence: { platform: { source: 'user_corrected', confidence: 1, review_status: 'reviewed' } },
+        attributes: [{ key: 'order_channel', value: 'Delivery', source: 'user_corrected', confidence: 1, review_status: 'reviewed' }]
+      },
+      tags: [{ name: 'Work Meal', normalized_name: 'work meal', source: 'user_corrected', confidence: 0.95, review_status: 'reviewed' }],
+      splits: [{ member_id: 7, amount_paise: 92000 }]
+    })
     expect((confirmInit.headers as Record<string, string>)['Idempotency-Key']).toBeTruthy()
     expect(confirmed.account).toBe('HDFC UPI')
     expect(parsed.data.memberSplits).toEqual([{ memberId: '7', memberName: 'Sam', amountPaise: 92000 }])
@@ -128,13 +160,60 @@ describe('FastAPI adapter', () => {
     await expect(parseDraft('split equally without an amount')).rejects.toThrow('API request failed (422)')
   })
 
+  it('maps a grounded capture clarification without treating it as an error', async () => {
+    vi.stubEnv('VITE_API_URL', 'https://api.artha.test')
+    vi.stubEnv('VITE_DEMO_MODE', 'false')
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/drafts/parse')) {
+        return new Response(JSON.stringify({
+          outcome: 'clarification',
+          source_text: 'Paid 540 at Zomato',
+          understood: { amount_paise: 54_000, kind: 'expense', merchant: 'Zomato' },
+          missing_field: 'source_account_id',
+          question: 'How did you pay for Zomato?',
+          explanation: 'Choose one so Artha updates the correct balance. Nothing has been saved.',
+          choices: [
+            { id: 'hdfc', label: 'HDFC UPI', answer: 'paid from HDFC UPI' },
+            { id: 'sbi', label: 'SBI Cashback Card', answer: 'paid from SBI Cashback Card' }
+          ],
+          warnings: [],
+          parser_source: 'gemini:test-model'
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/api/v1/accounts') || url.endsWith('/api/v1/members')) {
+        return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { parseDraft } = await import('./api')
+
+    const parsed = await parseDraft('Paid 540 at Zomato')
+
+    expect(parsed).toMatchObject({
+      demo: false,
+      data: {
+        outcome: 'clarification',
+        sourceText: 'Paid 540 at Zomato',
+        understood: { amountPaise: 54_000, kind: 'expense', merchant: 'Zomato' },
+        missingField: 'source_account_id',
+        choices: [
+          { id: 'hdfc', label: 'HDFC UPI', answer: 'paid from HDFC UPI' },
+          { id: 'sbi', label: 'SBI Cashback Card', answer: 'paid from SBI Cashback Card' }
+        ]
+      }
+    })
+  })
+
   it('uses the local parser only for a transient API outage in demo mode', async () => {
     vi.stubEnv('VITE_API_URL', 'http://api.test')
     vi.stubEnv('VITE_DEMO_MODE', 'true')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 503 })))
-    const { parseDraft } = await import('./api')
+    const { isCaptureClarification, parseDraft } = await import('./api')
 
     const parsed = await parseDraft('Paid 250 for coffee yesterday from HDFC UPI')
+    if (isCaptureClarification(parsed.data)) throw new Error('expected a review draft')
     expect(parsed.demo).toBe(true)
     expect(parsed.data.amountPaise).toBe(25_000)
     expect(parsed.data.occurredAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
@@ -238,6 +317,7 @@ describe('FastAPI adapter', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       display_name: 'Ari',
       household_name: 'Ari household',
+      is_demo: true,
       members: [{ id: 'member-1', name: 'Sam' }]
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
     const { getUserProfile } = await import('./api')
@@ -245,6 +325,7 @@ describe('FastAPI adapter', () => {
     await expect(getUserProfile()).resolves.toEqual({
       displayName: 'Ari',
       householdName: 'Ari household',
+      isDemo: true,
       members: [{ id: 'member-1', name: 'Sam' }]
     })
   })

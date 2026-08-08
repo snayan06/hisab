@@ -15,7 +15,7 @@ describe('HomePage quick capture', () => {
     const user = userEvent.setup()
     render(
       <RouterProvider>
-        <HomePage dashboard={demoDashboard} demoMode profile={{ displayName: 'You', householdName: 'My household', members: [] }} />
+        <HomePage dashboard={demoDashboard} demoMode profile={{ displayName: 'You', householdName: 'My household', members: [], isDemo: true }} />
       </RouterProvider>,
     )
 
@@ -30,7 +30,7 @@ describe('HomePage quick capture', () => {
   it('provides chart values without relying on color or hover', () => {
     render(
       <RouterProvider>
-        <HomePage dashboard={demoDashboard} demoMode profile={{ displayName: 'You', householdName: 'My household', members: [] }} />
+        <HomePage dashboard={demoDashboard} demoMode profile={{ displayName: 'You', householdName: 'My household', members: [], isDemo: true }} />
       </RouterProvider>,
     )
 
@@ -42,7 +42,7 @@ describe('HomePage quick capture', () => {
   it('shows a useful chart empty state', () => {
     render(
       <RouterProvider>
-        <HomePage dashboard={{ ...demoDashboard, monthly: [] }} demoMode profile={{ displayName: 'You', householdName: 'My household', members: [] }} />
+        <HomePage dashboard={{ ...demoDashboard, monthly: [] }} demoMode profile={{ displayName: 'You', householdName: 'My household', members: [], isDemo: true }} />
       </RouterProvider>,
     )
 

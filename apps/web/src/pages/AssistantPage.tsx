@@ -1,5 +1,5 @@
 import { Bot, ChartNoAxesCombined, LockKeyhole, Send, Sparkles } from 'lucide-react'
-import { useLayoutEffect, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useState, type FormEvent } from 'react'
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Badge, Button, Card } from '../components/ui'
 import { chatAssistant } from '../lib/api'
@@ -12,12 +12,29 @@ interface Exchange {
 }
 
 const suggestions = ['Where did I spend the most this month?', 'Show my monthly spending trend', 'What is my available balance?']
+const progressMessages = [
+  'Reading your latest ledger summary…',
+  'Choosing the safest view for your question…',
+  'Preparing verified numbers and charts…'
+]
 
 export function AssistantPage() {
   const [message, setMessage] = useState('')
   const [history, setHistory] = useState<Exchange[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [progressIndex, setProgressIndex] = useState(0)
+
+  useEffect(() => {
+    if (!loading) {
+      setProgressIndex(0)
+      return
+    }
+    const timer = window.setInterval(() => {
+      setProgressIndex((current) => Math.min(current + 1, progressMessages.length - 1))
+    }, 650)
+    return () => window.clearInterval(timer)
+  }, [loading])
 
   useLayoutEffect(() => {
     if (error) window.scrollTo({ top: 0, behavior: 'auto' })
@@ -49,7 +66,7 @@ export function AssistantPage() {
         <div><p className="flex items-center gap-1.5 text-sm font-semibold text-moss-700"><Sparkles className="h-4 w-4" aria-hidden="true" /> Preview</p><h1 className="font-display mt-1 text-balance text-3xl font-bold tracking-[-0.05em] sm:text-4xl">Ask your Artha.</h1><p className="mt-2 text-pretty text-sm text-[#718078] tone-muted">Get a plain-language view of your ledger. Answers are rendered only as safe, approved widgets.</p></div>
       </div>
 
-      <div role="note" aria-label="Fictional-pilot AI notice" className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100"><strong>Fictional pilot.</strong> Your submitted question is sent through the Artha server to the configured Gemini model. Do not enter real family-finance data. <a href="/settings" className="font-semibold underline underline-offset-2">Settings</a> has details.</div>
+      <div role="note" aria-label="AI-assisted answer" className="mt-5 rounded-2xl border border-moss-200 bg-moss-50 px-4 py-3 text-xs leading-5 text-moss-900 dark:border-night-border dark:bg-night-raised dark:text-night-ink"><strong>AI-assisted.</strong> Artha sends your question to the configured AI provider to prepare a reviewable answer. Ask Artha is read-only and cannot change your ledger. <a href="/settings" className="font-semibold underline underline-offset-2">Settings</a> has details.</div>
 
       <Card className="mt-6 overflow-hidden">
         <div className="flex items-start gap-3 border-b border-line bg-moss-50 p-4 text-xs text-[#607068] tone-muted sm:items-center">
@@ -60,14 +77,15 @@ export function AssistantPage() {
           {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
           {history.length === 0 && <EmptyState onPick={setMessage} />}
           {history.map((exchange) => <ExchangeView key={exchange.id} exchange={exchange} onPick={setMessage} />)}
-          {loading && <div role="status" className="flex items-center gap-3 text-sm text-[#718078] tone-muted"><span className="h-2 w-2 animate-pulse rounded-full bg-moss-600 motion-reduce:animate-none" aria-hidden="true" /> Reviewing your ledger…</div>}
+          {loading && <div role="status" aria-live="polite" className="flex items-center gap-3 text-sm text-[#718078] tone-muted"><span className="h-2 w-2 animate-pulse rounded-full bg-moss-600 motion-reduce:animate-none" aria-hidden="true" /> {progressMessages[progressIndex]}</div>}
         </div>
         <form onSubmit={(event) => void send(event)} className="border-t border-line bg-[#fbfcfa] p-3 dark:bg-night-raised sm:p-4">
           <label htmlFor="assistant-message" className="sr-only">Ask Artha</label>
           <div className="flex items-end gap-2 rounded-[20px] border border-line bg-white p-2 focus-within:border-moss-400 focus-within:ring-4 focus-within:ring-moss-100">
-            <textarea id="assistant-message" name="assistant-message" autoComplete="off" rows={2} value={message} disabled={loading} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send() } }} placeholder="Ask about spending, balances, or trends…" className="assistant-input min-h-11 flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60" />
+            <textarea id="assistant-message" name="assistant-message" autoComplete="off" rows={2} value={message} disabled={loading} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return; event.preventDefault(); if (!message.trim() || loading) return; void send() }} placeholder="Ask about spending, balances, or trends…" className="assistant-input min-h-11 flex-1 resize-none border-0 bg-transparent px-2 py-2.5 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-60" />
             <Button type="submit" disabled={!message.trim()} loading={loading} className="h-11 w-11 shrink-0 rounded-2xl px-0" aria-label="Send question"><Send className="h-4 w-4" aria-hidden="true" /></Button>
           </div>
+          <p className="mt-2 px-2 text-xs text-[#7b8781] tone-muted">Enter to continue · Shift+Enter for a new line.</p>
         </form>
       </Card>
     </div>

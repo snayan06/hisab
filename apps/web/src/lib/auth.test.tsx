@@ -7,6 +7,7 @@ import { RouterProvider } from './router'
 const supabase = vi.hoisted(() => {
   const getSession = vi.fn()
   const signInWithOtp = vi.fn()
+  const signInWithPassword = vi.fn()
   const signOut = vi.fn()
   const refreshSession = vi.fn()
   let authCallback: ((event: AuthChangeEvent, session: Session | null) => void) | undefined
@@ -15,6 +16,7 @@ const supabase = vi.hoisted(() => {
     auth: {
       getSession,
       signInWithOtp,
+      signInWithPassword,
       signOut,
       refreshSession,
       onAuthStateChange: vi.fn((callback: typeof authCallback) => {
@@ -23,7 +25,7 @@ const supabase = vi.hoisted(() => {
       })
     }
   }
-  return { getSession, signInWithOtp, signOut, refreshSession, unsubscribe, client, callback: () => authCallback }
+  return { getSession, signInWithOtp, signInWithPassword, signOut, refreshSession, unsubscribe, client, callback: () => authCallback }
 })
 
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => supabase.client) }))
@@ -44,6 +46,11 @@ function session(token: string): Session {
 function AuthProbe() {
   const auth = useAuth()
   return <div><span>{auth.status}</span><span>{auth.session?.access_token ?? 'none'}</span><button onClick={() => void auth.refreshSession()}>Refresh</button><button onClick={() => void auth.signOut()}>Sign out</button></div>
+}
+
+function PasswordProbe() {
+  const auth = useAuth()
+  return <button onClick={() => void auth.signInWithPassword('  demo@example.com  ', 'private-password')}>Use password</button>
 }
 
 function createMemoryStorage(): Storage {
@@ -73,6 +80,7 @@ describe('Supabase auth provider', () => {
     vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'public-anon-key')
     supabase.getSession.mockResolvedValue({ data: { session: null }, error: null })
     supabase.signInWithOtp.mockResolvedValue({ data: {}, error: null })
+    supabase.signInWithPassword.mockResolvedValue({ data: { session: session('password-token') }, error: null })
     supabase.signOut.mockResolvedValue({ error: null })
     supabase.refreshSession.mockResolvedValue({ data: { session: null }, error: null })
     window.history.replaceState({}, '', '/')
@@ -105,6 +113,20 @@ describe('Supabase auth provider', () => {
       options: { emailRedirectTo: window.location.origin }
     }))
     expect(screen.getByRole('status')).toHaveTextContent('sign-in is not complete yet')
+  })
+
+  it('signs in with a password without persisting or echoing the password', async () => {
+    const user = userEvent.setup()
+    render(<AuthProvider><PasswordProbe /></AuthProvider>)
+
+    await user.click(await screen.findByRole('button', { name: 'Use password' }))
+
+    expect(supabase.signInWithPassword).toHaveBeenCalledWith({
+      email: 'demo@example.com',
+      password: 'private-password'
+    })
+    expect(localStorage.getItem('private-password')).toBeNull()
+    expect(document.body).not.toHaveTextContent('private-password')
   })
 
   it('loads, refreshes, observes and signs out of the persisted session', async () => {

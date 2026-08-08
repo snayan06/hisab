@@ -11,6 +11,7 @@ from typing import Annotated, Literal, Protocol, cast
 import httpx
 from google import genai
 from google.genai import errors as genai_errors
+from google.genai._gaos.lib import compat_errors as interaction_errors
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -20,6 +21,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from .transaction_metadata import ModelAttribute, ModelFieldEvidence, ModelTag
 
 
 class StrictModel(BaseModel):
@@ -81,6 +84,9 @@ class CaptureInterpretationError(Exception):
         self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
         super().__init__(kind.value)
+
+
+GEMINI_API_ERRORS = (genai_errors.APIError, interaction_errors.APIError)
 
 
 class AssistantUnavailableError(RuntimeError):
@@ -415,6 +421,9 @@ class AssistantStatus(StrictModel):
     active_provider: LlmProvider | None = None
     ollama_fallback_enabled: bool
     detail: Literal["ready", "disabled", "missing_api_key", "unavailable"]
+    data_policy: Literal["sample_only", "private_approved"] = "sample_only"
+    personal_data_enabled: bool = False
+    is_demo: bool = False
 
 
 class AssistantChatResponse(StrictModel):
@@ -502,6 +511,11 @@ class CaptureDraftInterpretation(StrictModel):
     kind: Literal["expense", "income", "transfer"]
     amount_paise: int = Field(gt=0)
     description: str = Field(min_length=1, max_length=160)
+    platform: str | None = Field(default=None, max_length=100)
+    subcategory: str | None = Field(default=None, max_length=80)
+    attributes: list[ModelAttribute] = Field(default_factory=list, max_length=8)
+    tags: list[ModelTag] = Field(default_factory=list, max_length=8)
+    field_evidence: list[ModelFieldEvidence] = Field(default_factory=list, max_length=12)
     category_id: str | None = Field(default=None, max_length=80)
     category_name: str | None = Field(default=None, max_length=80)
     source_account_id: str = Field(min_length=1, max_length=80)
@@ -529,14 +543,52 @@ class CaptureDraftInterpretation(StrictModel):
             raise ValueError("destination account is only valid for transfers")
         if self.member_ids and not self.split_equally:
             raise ValueError("selected members require an explicit equal split")
+        evidence_fields = [item.field for item in self.field_evidence]
+        if len(evidence_fields) != len(set(evidence_fields)):
+            raise ValueError("capture field evidence must be unique")
+        if self.kind == "transfer" and (
+            self.platform is not None
+            or self.subcategory is not None
+            or self.attributes
+            or self.tags
+        ):
+            raise ValueError("transfers cannot contain expense metadata or tags")
         return self
 
 
 class CaptureClarification(StrictModel):
     outcome: Literal["clarify"]
     question: str = Field(min_length=1, max_length=240)
-    missing: list[str] = Field(default_factory=list, max_length=8)
+    missing: list[
+        Literal[
+            "amount_paise",
+            "kind",
+            "description",
+            "source_account_id",
+            "destination_account_id",
+            "category_id",
+            "member_ids",
+            "occurred_on",
+        ]
+    ] = Field(min_length=1, max_length=8)
+    amount_paise: int | None = Field(default=None, gt=0)
+    kind: Literal["expense", "income", "transfer"] | None = None
+    description: str | None = Field(default=None, min_length=1, max_length=160)
+    category_id: str | None = Field(default=None, max_length=80)
+    category_name: str | None = Field(default=None, max_length=80)
+    source_account_id: str | None = Field(default=None, max_length=80)
+    destination_account_id: str | None = Field(default=None, max_length=80)
+    member_ids: list[str] = Field(default_factory=list, max_length=20)
+    occurred_on: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     warnings: list[str] = Field(default_factory=list, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_partial_capture(self) -> CaptureClarification:
+        if (self.category_id is None) != (self.category_name is None):
+            raise ValueError("category ID and name must both be present or absent")
+        if len(self.member_ids) != len(set(self.member_ids)):
+            raise ValueError("member IDs must be unique")
+        return self
 
 
 class CaptureRejection(StrictModel):
@@ -666,12 +718,20 @@ ambiguous when both day-first and month-first readings are valid, so ask for an 
 A named date such as 2 Aug is unambiguous; resolve it in context.today's year unless the utterance
 states another year. A payment to a person from one owned account is an expense, not a self
 transfer, and does not require destination_account_id; use Other when no purpose is stated.
+Keep the reviewed merchant or counterparty in description. Keep a delivery or marketplace
+intermediary in platform instead of replacing the merchant: Burger King via Zomato means
+description="Burger King" and platform="Zomato". Do not infer cuisine, location, restaurant
+branch, companions, or arbitrary attributes. attributes may use only meal_occasion or
+order_channel. tags require an explicit phrase such as date night, work meal, on vacation, or
+treat. Model-created evidence sources may only be user_explicit or model_suggested.
 The response root is an object with a result property. Inside result, include every field required
 by the selected outcome schema. For draft fields that do not apply, use null, an empty list, or
 false exactly as allowed by the schema; clarification and rejection must include warnings even
 when the list is empty.
-In a clarification result, missing must contain exact schema field identifiers such as
-amount_paise, kind, source_account_id, destination_account_id, description, or occurred_on.
+In a clarification result, ask only one concise question, put every unresolved required field in
+missing using exact schema field identifiers, and include every safely understood partial field. Use
+null or empty lists for partial fields that are not supported. The application, not your prose,
+will create the final question and choices shown to the user.
 Use only exact account, member and category IDs from the provided allow-lists. Convert Indian
 amount shorthand precisely: 25k means 25,000 rupees or 2,500,000 paise; 1.5 lakh means
 150,000 rupees or 15,000,000 paise. A self transfer moves money between two accounts and is
@@ -770,8 +830,12 @@ def _retry_after_seconds(value: str | None) -> float | None:
 
 
 def _capture_failure(error: Exception) -> CaptureInterpretationError:
-    if isinstance(error, genai_errors.APIError):
-        status = error.code
+    if isinstance(error, interaction_errors.APITimeoutError):
+        return CaptureInterpretationError(CaptureFailureKind.TIMEOUT, retryable=True)
+    if isinstance(error, interaction_errors.APIConnectionError):
+        return CaptureInterpretationError(CaptureFailureKind.NETWORK, retryable=True)
+    if isinstance(error, GEMINI_API_ERRORS):
+        status = getattr(error, "code", getattr(error, "status_code", None))
         response = getattr(error, "response", None)
         headers = getattr(response, "headers", {})
         if status == 429:
@@ -780,9 +844,13 @@ def _capture_failure(error: Exception) -> CaptureInterpretationError:
                 retryable=True,
                 retry_after_seconds=_retry_after_seconds(headers.get("Retry-After")),
             )
-        if status >= 500:
+        if isinstance(status, int) and status >= 500:
             return CaptureInterpretationError(
                 CaptureFailureKind.PROVIDER_5XX, retryable=True
+            )
+        if not isinstance(status, int):
+            return CaptureInterpretationError(
+                CaptureFailureKind.UNKNOWN, retryable=False
             )
         return CaptureInterpretationError(
             CaptureFailureKind.PROVIDER_4XX, retryable=False
@@ -891,7 +959,7 @@ class LocalFinancialAssistant:
             else:
                 await self._ollama_tags()
                 model = settings.ollama_model
-        except (httpx.HTTPError, genai_errors.APIError, ValueError):
+        except (httpx.HTTPError, *GEMINI_API_ERRORS, ValueError):
             return AssistantStatus(
                 configured=True,
                 provider=settings.provider,
@@ -937,7 +1005,7 @@ class LocalFinancialAssistant:
                     result = await self._ollama_completion(message, context)
             except (
                 httpx.HTTPError,
-                genai_errors.APIError,
+                *GEMINI_API_ERRORS,
                 KeyError,
                 TypeError,
                 ValueError,
@@ -975,7 +1043,7 @@ class LocalFinancialAssistant:
                 result = self._ground_tag_suggestion(result, payload.allowed_categories)
             except (
                 httpx.HTTPError,
-                genai_errors.APIError,
+                *GEMINI_API_ERRORS,
                 KeyError,
                 TypeError,
                 ValueError,
@@ -1028,7 +1096,7 @@ class LocalFinancialAssistant:
                 self._ground_capture_interpretation(result, context)
             except (
                 httpx.HTTPError,
-                genai_errors.APIError,
+                *GEMINI_API_ERRORS,
                 KeyError,
                 TypeError,
                 ValueError,
@@ -1175,14 +1243,17 @@ class LocalFinancialAssistant:
     def _ground_capture_interpretation(
         result: CaptureInterpretation, context: CaptureContext
     ) -> None:
-        if not isinstance(result, CaptureDraftInterpretation):
+        if not isinstance(result, (CaptureDraftInterpretation, CaptureClarification)):
             return
         account_ids = {account.id for account in context.accounts}
         member_ids = {member.id for member in context.members}
         categories = {
             (category.id, category.name): category.kind for category in context.categories
         }
-        if result.source_account_id not in account_ids:
+        if (
+            result.source_account_id is not None
+            and result.source_account_id not in account_ids
+        ):
             raise ValueError("model selected an unknown source account")
         if (
             result.destination_account_id is not None

@@ -26,6 +26,7 @@ from artha_api.capture_evals import (
     score_capture_case,
     write_reports,
 )
+from artha_api.transaction_metadata import ModelAttribute, ModelTag
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -65,9 +66,9 @@ def test_versioned_suite_loads_and_validates_without_a_provider() -> None:
     suite = _suite()
     report = build_validation_report(suite)
 
-    assert len(suite.cases) == 50
+    assert len(suite.cases) == 60
     assert report["mode"] == "validation"
-    assert report["total_cases"] == 50
+    assert report["total_cases"] == 60
     assert report["failures"] == []
 
 
@@ -93,6 +94,57 @@ def test_scoring_compares_structured_subset_and_omits_free_text() -> None:
     assert "description" not in score.actual
     assert "warnings" not in score.actual
     assert "confidence" not in score.actual
+
+
+def test_scoring_compares_safe_structured_transaction_metadata() -> None:
+    case = CaptureEvalCase(
+        id="CAP-METADATA",
+        context_id="standard-household",
+        utterance="fictional metadata input",
+        outcome="draft",
+        expected={
+            "kind": "expense",
+            "amount_paise": 68_000,
+            "source_account_id": "acct-hdfc-upi",
+            "platform": "Zomato",
+            "attributes": [{"key": "meal_occasion", "value": "Dinner"}],
+            "tags": ["Date Night"],
+        },
+        tags=("metadata", "merchant-platform"),
+    )
+    response = _response(
+        kind="expense",
+        amount_paise=68_000,
+        description="Fictional merchant",
+        source_account_id="acct-hdfc-upi",
+        destination_account_id=None,
+        platform="Zomato",
+        attributes=[
+            ModelAttribute(
+                key="meal_occasion",
+                value="Dinner",
+                source="user_explicit",
+                confidence=0.99,
+            )
+        ],
+        tags=[
+            ModelTag(
+                name="Date Night",
+                source="user_explicit",
+                confidence=0.98,
+            )
+        ],
+    )
+
+    score = score_capture_case(case, response, attempts=1)
+
+    assert score.passed is True
+    assert score.actual is not None
+    assert score.actual["platform"] == "Zomato"
+    assert score.actual["attributes"] == [
+        {"key": "meal_occasion", "value": "Dinner"}
+    ]
+    assert score.actual["tags"] == ["Date Night"]
 
 
 def test_scoring_reports_field_and_outcome_mismatches() -> None:
@@ -289,7 +341,7 @@ def test_validation_markdown_states_that_no_model_was_called() -> None:
     markdown = render_evaluation_markdown(build_validation_report(_suite()))
 
     assert "No model was called" in markdown
-    assert "50" in markdown
+    assert "60" in markdown
 
 
 def test_run_mode_fails_closed_without_a_provider_key(
