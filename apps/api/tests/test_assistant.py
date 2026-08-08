@@ -84,6 +84,22 @@ class RateLimitedGeminiClient:
         )
 
 
+class FailingGeminiInteractions:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def create(self, **_body: object) -> SimpleNamespace:
+        raise self.error
+
+
+class FailingGeminiClient:
+    def __init__(self, error: Exception) -> None:
+        self.aio = SimpleNamespace(
+            interactions=FailingGeminiInteractions(error),
+            models=FakeGeminiModels(),
+        )
+
+
 def test_groq_provider_is_rejected_as_unsupported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1037,6 +1053,52 @@ async def test_interactions_rate_limit_is_sanitized_for_capture() -> None:
     assert captured.value.retryable is True
     assert captured.value.retry_after_seconds == 23.0
     assert str(captured.value) == "rate_limited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_error", "expected_kind"),
+    [
+        (
+            interaction_errors.APITimeoutError(
+                httpx.Request("POST", "https://gemini.invalid/interactions")
+            ),
+            CaptureFailureKind.TIMEOUT,
+        ),
+        (
+            interaction_errors.APIConnectionError(
+                request=httpx.Request(
+                    "POST", "https://gemini.invalid/interactions"
+                )
+            ),
+            CaptureFailureKind.NETWORK,
+        ),
+    ],
+)
+async def test_interactions_transport_failures_are_retryable_for_capture(
+    provider_error: Exception,
+    expected_kind: CaptureFailureKind,
+) -> None:
+    assistant = LocalFinancialAssistant(
+        AssistantSettings(
+            provider=LlmProvider.GEMINI,
+            gemini_api_key="gemini-test-key",
+        ),
+        gemini_client=FailingGeminiClient(provider_error),
+    )
+    context = CaptureContext(
+        today="2026-08-04",
+        timezone="Asia/Kolkata",
+        accounts=[CaptureAccount(id="known-id", name="Known Bank", kind="bank")],
+    )
+
+    with pytest.raises(CaptureInterpretationError) as captured:
+        await assistant.interpret_capture_or_raise("fictional capture", context)
+
+    assert captured.value.kind is expected_kind
+    assert captured.value.retryable is True
+    assert captured.value.retry_after_seconds is None
+    assert str(captured.value) == expected_kind.value
 
 
 @pytest.mark.asyncio

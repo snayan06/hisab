@@ -240,7 +240,7 @@ Current local release-candidate evidence:
 | Gate | Result |
 | --- | --- |
 | Web | 19 test files, 184 tests passed |
-| API | 252 tests passed |
+| API | 254 tests passed |
 | AI contracts | 60 capture, 30 auto-tag and 24 assistant cases valid |
 | Hosted Gemini on sample data | Prior deployed baseline: 50/50 capture, 30/30 auto-tag, 24/24 assistant; the new 60-case hosted rerun is pending |
 | Production UI | All six primary pages fit at 320 px, 390 px and 1440 px; light/dark controls and mobile/desktop dark UI verified |

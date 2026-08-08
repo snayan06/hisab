@@ -109,7 +109,7 @@ release guards.
 
 ```text
 Current release candidate web: 19 files, 184 tests passed
-Current release candidate API: 252 tests passed
+Current release candidate API: 254 tests passed
 Quality: ESLint, TypeScript, Ruff and strict mypy passed
 Build: production PWA passed without the previous bundle-size warning
 SQL: 8 migrations, seed and 4 SQL contract tests parsed
@@ -189,7 +189,7 @@ Only ask for these when the engineering work reaches the corresponding gate:
 
 | Date | Checkpoint |
 | --- | --- |
-| 9 Aug 2026 | Implemented the message/metadata release candidate on `codex/message-ux`: safe Enter/Shift+Enter/IME behavior, grounded one-question capture continuation, merchant/platform/category precedence, bounded reviewed context and optional tags, truthful Quick Add/Ask Artha progress messages, versioned JSON persistence, 60 capture evals and a clean manager-ready editable architecture pack. Fresh local gate: 184 web, 252 API, build, SQL and 60/30/24 keyless AI contracts. The candidate is published as PR #23 but is intentionally not merged or deployed while the companion feature is completed. |
+| 9 Aug 2026 | Implemented the message/metadata release candidate on `codex/message-ux`: safe Enter/Shift+Enter/IME behavior, grounded one-question capture continuation, merchant/platform/category precedence, bounded reviewed context and optional tags, truthful Quick Add/Ask Artha progress messages, versioned JSON persistence, 60 capture evals and a clean manager-ready editable architecture pack. Fresh local gate: 184 web, 254 API, build, SQL and 60/30/24 keyless AI contracts. The candidate is published as PR #23 but is intentionally not merged or deployed while the companion feature is completed. |
 | 9 Aug 2026 | Prepared the approved message-UX and structured-transaction-metadata design on isolated branch `codex/message-ux` from current `origin/main`. The design covers composer keyboard safety, contextual capture continuation, warm accessible messaging, visible category reasoning, distinct merchant/platform/subcategory/tag taxonomy, bounded field evidence, normalized household tags/aliases, RLS/recovery/analytics/eval coverage and fictional final-domain acceptance. This is design-only and unpublished; no product code, migration, remote branch, PR or deployment was created before the work was handed back to the parent task. |
 | 8 Aug 2026 | Merged V1 capture-hardening PR #21 as `c4ae0dc`; main CI `31271421128`, CodeQL `31271421107` and both production Vercel deployments passed. Final-domain fictional QA then passed persisted login, six core routes, manual Expense/Income/Transfer recovery, a saved ₹123 Gemini expense with exact dashboard movement, unsaved `25k` income/transfer drafts, read-only assistant balance, filters, shared reconciliation, encrypted export and 390 px light/dark layout |
 | 8 Aug 2026 | Merged AI-primary PR #20 as `69e44a8`; main CI `31268322011`, CodeQL `31268322023` and web/API Vercel deployments passed. Separately added the editable architecture board and V1 capture hardening; after the latest boundary-quality fixes, that follow-up branch is locally green at 170 web, 223 API, 50+30+24 AI contracts and 8 migrations/4 SQL contracts, but is not published or deployed |

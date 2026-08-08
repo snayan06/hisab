@@ -830,6 +830,10 @@ def _retry_after_seconds(value: str | None) -> float | None:
 
 
 def _capture_failure(error: Exception) -> CaptureInterpretationError:
+    if isinstance(error, interaction_errors.APITimeoutError):
+        return CaptureInterpretationError(CaptureFailureKind.TIMEOUT, retryable=True)
+    if isinstance(error, interaction_errors.APIConnectionError):
+        return CaptureInterpretationError(CaptureFailureKind.NETWORK, retryable=True)
     if isinstance(error, GEMINI_API_ERRORS):
         status = getattr(error, "code", getattr(error, "status_code", None))
         response = getattr(error, "response", None)

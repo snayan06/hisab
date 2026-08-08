@@ -28,7 +28,7 @@ Status: PR #23 open; merge held for companion feature and final-domain acceptanc
 Fresh `make check` before the documentation pass:
 
 - Web: 19 files, 184 tests passed.
-- API: 252 tests passed.
+- API: 254 tests passed.
 - ESLint, TypeScript, Ruff and strict mypy passed.
 - Production PWA build passed.
 - Eight migrations, seed and four SQL contract files parsed.
@@ -50,10 +50,10 @@ The replacement Gemini key is stored locally in the ignored root `.env` and as
 Sensitive Vercel Production and Preview variables; it is never written to this
 repository. A hosted run reached the configured Gemini Interactions model and
 then hit its 15-request free-tier quota. That run exposed and fixed the newer
-Interactions SDK error boundary: rate limits now become sanitized retryable
-capture diagnostics or the normal unavailable state, never a raw provider
-exception. The complete hosted benchmark and deployed acceptance remain release
-gates after the companion feature is ready.
+Interactions SDK error boundary: rate limits, timeouts and connection failures
+now become sanitized retryable capture diagnostics or the normal unavailable
+state, never a raw provider exception. The complete hosted benchmark and
+deployed acceptance remain release gates after the companion feature is ready.
 
 ## Persistence and privacy
 
